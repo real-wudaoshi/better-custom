@@ -48,7 +48,7 @@ LLM provider——无需手工编辑 `models.json` / `models.yml`。
 从 npm 安装:
 
 ```bash
-pi install npm:better-custom
+pi install npm:better-custom-provider
 ```
 
 从 GitHub 安装:

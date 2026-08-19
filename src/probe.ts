@@ -53,7 +53,13 @@ async function fetchModelsList(baseUrl: string, headers: Record<string, string>)
 		const body = await response.text().catch(() => "");
 		throw new Error(`Probe failed (${response.status} ${response.statusText})${body ? `: ${body.slice(0, 200)}` : ""}`);
 	}
-	return await response.json();
+	// A 200 that isn't JSON means we hit a web UI, not the API (e.g. New API
+	// serving its console HTML at /models) — retry with the other base variant.
+	try {
+		return await response.json();
+	} catch {
+		throw new ProbeRetryable(`Probe got a non-JSON response (a web page, not an API): ${probeUrl}`);
+	}
 }
 
 export async function probeOpenAIModels(baseUrl: string, apiKeyMode: ApiKeyMode, apiKeyValue?: string): Promise<ProbeResult> {

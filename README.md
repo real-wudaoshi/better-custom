@@ -55,7 +55,7 @@ required.
 From npm:
 
 ```bash
-pi install npm:better-custom
+pi install npm:better-custom-provider
 ```
 
 From GitHub:
