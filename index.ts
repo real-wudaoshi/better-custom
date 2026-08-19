@@ -3,22 +3,69 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth } from "@mariozechner/pi-tui";
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
-type ProviderApi = "openai-completions" | "anthropic-messages";
-type ProviderStyle = "openai" | "anthropic" | "ollama";
+type YamlModule = {
+	parse(text: string): any;
+	stringify(value: any, options?: { lineWidth?: number }): string;
+};
+
+// `yaml` is only needed to read/write OMP's models.yml. When the package is
+// installed via `pi install`, pi runs npm install so the dependency is present.
+// But when this folder is copied manually into ~/.pi/agent/extensions/ the
+// dependency may be missing — and a static `import ... from "yaml"` would crash
+// the whole extension at load time. Load it lazily so the extension always
+// starts; YAML configs then degrade to JSON, which is a valid YAML subset.
+const requireFromHere = (() => {
+	try {
+		return createRequire(import.meta.url);
+	} catch {
+		return createRequire(join(process.cwd(), "index.ts"));
+	}
+})();
+let yamlModule: YamlModule | undefined;
+try {
+	yamlModule = requireFromHere("yaml") as YamlModule;
+} catch {
+	yamlModule = undefined;
+}
+
+type ProviderApi = "openai-completions" | "openai-responses" | "anthropic-messages";
+type ProviderStyle = "openai" | "openai-responses" | "anthropic" | "ollama";
 type ApiKeyMode = "env" | "literal" | "shell" | "none";
 // pi's reasoning ceilings. "off" means no reasoning; the rest are the levels a
 // model is allowed to use. See pi-ai getSupportedThinkingLevels.
-type ReasoningCeiling = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-const REASONING_LEVELS: ReasoningCeiling[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+type ReasoningCeiling = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+const REASONING_LEVELS: ReasoningCeiling[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+const PI_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 // Per-model knobs the wizard can write. apiKey lives at provider scope, not here.
 type ModelOptions = {
 	reasoning: ReasoningCeiling;
 	vision: boolean;
 	contextWindow?: number;
+	maxTokens?: number;
+	// When set, written verbatim instead of deriving a map from the ceiling. Used
+	// when a probe learned the provider's exact thinking levels (effort options).
+	thinkingLevelMap?: Record<string, string | null>;
+};
+
+// Best-effort model metadata detected while probing /models.
+type ModelProbeInfo = {
+	contextWindow?: number;
+	maxTokens?: number;
+	vision?: boolean;
+	reasoning?: boolean;
+	alwaysThinking?: boolean; // reasoning exists but cannot be turned off
+	effortOptions?: string[]; // provider reasoning-effort names (none/minimal/low/.../max)
+	endpointTypes?: string[]; // New API / One API: supported_endpoint_types (chat, embeddings, ...)
+	inferred?: boolean; // filled from the built-in model table, not the gateway
+};
+
+type ProbeResult = {
+	items: ProbeItem[];
+	infoById: Map<string, ModelProbeInfo>;
 };
 
 type ModelsConfig = {
@@ -81,7 +128,7 @@ function loadModelsConfig(): ModelsConfig {
 	const raw = readFileSync(MODELS_JSON_PATH, "utf8").trim();
 	if (!raw) return { providers: {} };
 
-	const parsed = (IS_YAML_CONFIG ? parseYaml(raw) : JSON.parse(raw)) as ModelsConfig;
+	const parsed = (IS_YAML_CONFIG ? parseYamlConfig(raw) : JSON.parse(raw)) as ModelsConfig;
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 		throw new Error("models config must be an object");
 	}
@@ -91,9 +138,34 @@ function loadModelsConfig(): ModelsConfig {
 	return parsed;
 }
 
+// Parse a models.yml. Prefers the yaml package; when it is missing (folder
+// copied into ~/.pi/agent/extensions/ without npm install) JSON is accepted,
+// because JSON is a valid YAML subset. Genuine YAML gets a clear error instead
+// of corrupting the file.
+function parseYamlConfig(raw: string): any {
+	if (yamlModule) return yamlModule.parse(raw);
+	try {
+		return JSON.parse(raw);
+	} catch {
+		throw new Error(
+			`${MODELS_JSON_PATH} is YAML, but the "yaml" package is not installed. ` +
+				'Run "npm install" in the better-custom folder, or reinstall the extension with "pi install", to edit YAML configs.',
+		);
+	}
+}
+
 function saveModelsConfig(config: ModelsConfig) {
 	ensureConfigDir();
-	const content = IS_YAML_CONFIG ? stringifyYaml(config, { lineWidth: 0 }) : JSON.stringify(config, null, 2);
+	let content: string;
+	if (IS_YAML_CONFIG) {
+		content = yamlModule
+			? yamlModule.stringify(config, { lineWidth: 0 })
+			: // JSON is valid YAML — writing it keeps OMP/pi able to load the config
+				// even when the yaml package is unavailable.
+				JSON.stringify(config, null, 2);
+	} else {
+		content = JSON.stringify(config, null, 2);
+	}
 	writeFileSync(MODELS_JSON_PATH, `${content.trimEnd()}\n`, "utf8");
 }
 
@@ -138,7 +210,7 @@ function normalizeEndpoint(input: string, api: ProviderApi): string {
 	const url = new URL(addDefaultScheme(input.trim()));
 	let pathname = url.pathname.replace(/\/+$/, "") || "/";
 
-	if (api === "openai-completions") {
+	if (api === "openai-completions" || api === "openai-responses") {
 		pathname = stripSuffix(pathname, "/chat/completions");
 		pathname = stripSuffix(pathname, "/responses");
 		pathname = stripSuffix(pathname, "/completions");
@@ -176,6 +248,9 @@ function buildProbeUrl(baseUrl: string): string {
 	return new URL("models", withSlash).toString();
 }
 
+const PROBE_CONCURRENCY = 4;
+const PROBE_TIMEOUT_MS = 4000;
+
 function resolveApiKeyForProbe(mode: ApiKeyMode, storedValue?: string): string | undefined {
 	if (!storedValue || mode === "none") return undefined;
 	if (mode === "literal") return storedValue;
@@ -203,7 +278,7 @@ function serializeApiKey(mode: ApiKeyMode, value?: string, style?: ProviderStyle
 	return value;
 }
 
-async function probeOpenAIModels(baseUrl: string, apiKeyMode: ApiKeyMode, apiKeyValue?: string): Promise<ProbeItem[]> {
+async function probeOpenAIModels(baseUrl: string, apiKeyMode: ApiKeyMode, apiKeyValue?: string): Promise<ProbeResult> {
 	const headers: Record<string, string> = {
 		accept: "application/json",
 		"accept-encoding": "identity",
@@ -221,13 +296,356 @@ async function probeOpenAIModels(baseUrl: string, apiKeyMode: ApiKeyMode, apiKey
 
 	const json = (await response.json()) as any;
 	const rawModels = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : [];
+	const infoById = new Map<string, ModelProbeInfo>();
 	const ids = dedupe(
 		rawModels
-			.map((item: any) => (typeof item?.id === "string" ? item.id.trim() : ""))
+			.map((item: any) => {
+				if (typeof item?.id !== "string" || !item.id.trim()) return "";
+				const id = item.id.trim();
+				// Some /models lists carry metadata inline (OpenRouter, OpenModels,
+				// Epithre, ...). Capture it so the picker can show details without an
+				// extra round-trip per model.
+				const info = parseModelListItem(item);
+				if (info) infoById.set(id, info);
+				return id;
+			})
 			.filter(Boolean),
 	).sort((a, b) => a.localeCompare(b));
 
-	return ids.map((id) => ({ value: id, label: id }));
+	return {
+		items: ids.map((id) => ({ value: id, label: id, description: describeProbeInfo(infoById.get(id)) })),
+		infoById,
+	};
+}
+
+function getPath(obj: any, path: string): any {
+	let current = obj;
+	for (const key of path.split(".")) {
+		if (!current || typeof current !== "object") return undefined;
+		current = current[key];
+	}
+	return current;
+}
+
+function firstFiniteNumber(obj: any, ...paths: string[]): number | undefined {
+	for (const path of paths) {
+		const value = getPath(obj, path);
+		if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+	}
+	return undefined;
+}
+
+// Human-readable list of the metadata fields actually present in a probe result.
+function probeInfoSummary(info: ModelProbeInfo | undefined): string[] {
+	if (!info) return [];
+	const parts: string[] = [];
+	if (info.contextWindow !== undefined) parts.push("context");
+	if (info.maxTokens !== undefined) parts.push("max tokens");
+	if (info.reasoning !== undefined) parts.push("reasoning");
+	if (info.vision !== undefined) parts.push("vision");
+	return parts;
+}
+
+// Whether a probe result carries anything worth surfacing (including gateway
+// endpoint types, which don't count as "detected metadata" for the summary).
+function hasProbeInfo(info: ModelProbeInfo | undefined): boolean {
+	if (!info) return false;
+	return probeInfoSummary(info).length > 0 || (info.endpointTypes !== undefined && info.endpointTypes.length > 0);
+}
+
+function describeProbeInfo(info: ModelProbeInfo | undefined): string | undefined {
+	if (!info) return undefined;
+	const parts: string[] = [];
+	if (info.contextWindow !== undefined) parts.push(`ctx ${info.contextWindow}`);
+	if (info.maxTokens !== undefined) parts.push(`max ${info.maxTokens}`);
+	if (info.vision !== undefined) parts.push(info.vision ? "vision" : "text-only");
+	if (info.reasoning === true) parts.push(info.alwaysThinking ? "reasoning (always on)" : "reasoning");
+	else if (info.reasoning === false) parts.push("no reasoning");
+	if (info.endpointTypes && info.endpointTypes.length > 0) parts.push(info.endpointTypes.join("/"));
+	return parts.length > 0 ? parts.join(" • ") : undefined;
+}
+
+// One API / New API gateways (and their forks) attach extra model metadata
+// under "meta": { context_window, max_tokens, capabilities: { vision,
+// reasoning, ... }, supports_vision, supports_reasoning }. Fills only fields
+// that are still unknown, so OpenRouter/OpenAI-style data wins when both exist.
+function parseGatewayMetaFields(source: any, info: ModelProbeInfo): void {
+	const meta = source?.meta;
+	if (!meta || typeof meta !== "object") return;
+	if (info.contextWindow === undefined) {
+		const contextWindow = firstFiniteNumber(meta, "context_window", "max_input_tokens");
+		if (contextWindow !== undefined) info.contextWindow = contextWindow;
+	}
+	if (info.maxTokens === undefined) {
+		const maxTokens = firstFiniteNumber(meta, "max_output_tokens", "max_tokens");
+		if (maxTokens !== undefined) info.maxTokens = maxTokens;
+	}
+	const capabilities = meta.capabilities;
+	if (capabilities && typeof capabilities === "object") {
+		if (info.vision === undefined && typeof capabilities.vision === "boolean") info.vision = capabilities.vision;
+		if (info.reasoning === undefined && typeof capabilities.reasoning === "boolean") info.reasoning = capabilities.reasoning;
+		if (info.reasoning === undefined && typeof capabilities.thinking === "boolean") info.reasoning = capabilities.thinking;
+	}
+	if (info.vision === undefined && typeof meta.supports_vision === "boolean") info.vision = meta.supports_vision;
+	if (info.reasoning === undefined && typeof meta.supports_reasoning === "boolean") info.reasoning = meta.supports_reasoning;
+}
+
+// Inline metadata carried by some /models list entries (OpenRouter, OpenModels,
+// Epithre, One API / New API, ...). Returns undefined when the entry is bare.
+function parseModelListItem(item: any): ModelProbeInfo | undefined {
+	if (!item || typeof item !== "object") return undefined;
+	const info: ModelProbeInfo = {};
+
+	const contextWindow = firstFiniteNumber(item, "context_length", "context_window", "max_input_tokens");
+	if (contextWindow !== undefined) info.contextWindow = contextWindow;
+	const maxTokens = firstFiniteNumber(item, "max_output_tokens", "max_tokens", "top_provider.max_completion_tokens");
+	if (maxTokens !== undefined) info.maxTokens = maxTokens;
+	if (typeof item.reasoning === "boolean") info.reasoning = item.reasoning;
+
+	const modalities = Array.isArray(item.architecture?.input_modalities)
+		? item.architecture.input_modalities
+		: Array.isArray(item.modalities)
+			? item.modalities
+			: undefined;
+	if (modalities) info.vision = modalities.includes("image");
+
+	if (Array.isArray(item.capabilities)) {
+		if (info.reasoning === undefined) info.reasoning = item.capabilities.includes("thinking") || item.capabilities.includes("reasoning");
+		if (info.vision === undefined) info.vision = item.capabilities.includes("vision");
+	}
+
+	// New API's /v1/models entries carry supported_endpoint_types
+	// (e.g. ["chat"] or ["chat", "embeddings"]).
+	if (Array.isArray(item.supported_endpoint_types)) {
+		const types = item.supported_endpoint_types.filter((t: unknown): t is string => typeof t === "string");
+		if (types.length > 0) info.endpointTypes = types;
+	}
+
+	parseGatewayMetaFields(item, info);
+
+	return hasProbeInfo(info) ? info : undefined;
+}
+
+// Metadata from GET /models/{id} (OpenAI and compatible servers).
+function parseOpenAIModelDetail(json: any): ModelProbeInfo | undefined {
+	if (!json || typeof json !== "object") return undefined;
+	const info: ModelProbeInfo = {};
+
+	const contextWindow = firstFiniteNumber(json, "context_window");
+	if (contextWindow !== undefined) info.contextWindow = contextWindow;
+	const maxTokens = firstFiniteNumber(json, "max_output_tokens");
+	if (maxTokens !== undefined) info.maxTokens = maxTokens;
+
+	const capabilities = json.capabilities;
+	if (capabilities && typeof capabilities === "object") {
+		if (
+			capabilities.vision &&
+			typeof capabilities.vision === "object" &&
+			typeof capabilities.vision.supported === "boolean"
+		) {
+			info.vision = capabilities.vision.supported;
+		}
+		const reasoning = capabilities.reasoning;
+		if (reasoning && typeof reasoning === "object") {
+			const type = typeof reasoning.type === "string" ? reasoning.type : "";
+			if (type === "none") {
+				info.reasoning = false;
+			} else if (type === "minimal") {
+				// Thinking exists but cannot be turned off.
+				info.reasoning = true;
+				info.alwaysThinking = true;
+			} else if (type === "effort") {
+				info.reasoning = true;
+				if (Array.isArray(reasoning.effort_options)) {
+					info.effortOptions = reasoning.effort_options.filter((option: unknown): option is string => typeof option === "string");
+				}
+			}
+		}
+	}
+
+	// One API / New API gateways may also carry the extra "meta" object on
+	// GET /models/{id} responses.
+	parseGatewayMetaFields(json, info);
+
+	return probeInfoSummary(info).length > 0 ? info : undefined;
+}
+
+// Metadata from a LiteLLM proxy's GET /model/info — one call returns
+// model_info for every configured model (context_window, max_tokens,
+// supports_vision, supports_reasoning, ...). Returns true when the response
+// looked like a LiteLLM /model/info payload and filled at least one entry.
+function parseLiteLLMModelInfo(json: any, out: Map<string, ModelProbeInfo>): boolean {
+	if (!json || typeof json !== "object") return false;
+	// /model/info returns { data: [...] }; tolerate a nested { data: { data: [...] } }
+	const entries = Array.isArray(json.data)
+		? json.data
+		: Array.isArray(json?.data?.data)
+			? json.data.data
+			: [];
+	if (entries.length === 0) return false;
+	let found = false;
+	for (const entry of entries) {
+		if (!entry || typeof entry !== "object") continue;
+		const name = typeof entry.model_name === "string" ? entry.model_name.trim() : "";
+		const info = entry.model_info;
+		if (!name || !info || typeof info !== "object") continue;
+		const parsed: ModelProbeInfo = {};
+		const contextWindow = firstFiniteNumber(info, "context_window", "max_input_tokens");
+		if (contextWindow !== undefined) parsed.contextWindow = contextWindow;
+		const maxTokens = firstFiniteNumber(info, "max_output_tokens", "max_tokens");
+		if (maxTokens !== undefined) parsed.maxTokens = maxTokens;
+		if (typeof info.supports_vision === "boolean") parsed.vision = info.supports_vision;
+		if (typeof info.supports_reasoning === "boolean") parsed.reasoning = info.supports_reasoning;
+		if (probeInfoSummary(parsed).length > 0) {
+			out.set(name, parsed);
+			found = true;
+		}
+	}
+	return found;
+}
+
+// Fetch GET /models/{id} for each picked model to learn context_window,
+// max_output_tokens, and capabilities. Best effort: servers that don't expose
+// per-model details simply leave those fields unset.
+async function enrichOpenAIModelDetails(
+	baseUrl: string,
+	apiKeyMode: ApiKeyMode,
+	apiKeyValue: string | undefined,
+	ids: string[],
+): Promise<Map<string, ModelProbeInfo>> {
+	const headers: Record<string, string> = { accept: "application/json", "accept-encoding": "identity" };
+	const resolvedKey = resolveApiKeyForProbe(apiKeyMode, apiKeyValue);
+	if (resolvedKey) headers.authorization = `Bearer ${resolvedKey}`;
+
+	const base = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+	const out = new Map<string, ModelProbeInfo>();
+
+	// LiteLLM proxy: GET /model/info returns metadata for every model in one
+	// call, which is far cheaper than per-model fetches (and LiteLLM's
+	// /models/{id} has no metadata at all). Fall back to per-model fetches when
+	// the server doesn't expose it.
+	{
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+		let response: Response | undefined;
+		try {
+			response = await fetch(new URL("model/info", base).toString(), { headers, signal: controller.signal });
+		} catch {
+			// network error — treat as not-a-LiteLLM and fall through
+		} finally {
+			clearTimeout(timer);
+		}
+		if (response?.ok) {
+			const json = await response.json().catch(() => null);
+			if (parseLiteLLMModelInfo(json, out)) return out;
+		}
+	}
+
+	let cursor = 0;
+	async function worker() {
+		while (cursor < ids.length) {
+			const id = ids[cursor++];
+			try {
+				const controller = new AbortController();
+				const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+				const response = await fetch(new URL(`models/${encodeURIComponent(id)}`, base).toString(), {
+					headers,
+					signal: controller.signal,
+				});
+				clearTimeout(timer);
+				if (!response.ok) continue;
+				const json = await response.json().catch(() => null);
+				const info = parseOpenAIModelDetail(json);
+				if (info) out.set(id, info);
+			} catch {
+				// Best effort — skip models the server can't describe.
+			}
+		}
+	}
+
+	await Promise.all(Array.from({ length: Math.min(PROBE_CONCURRENCY, Math.max(1, ids.length)) }, worker));
+	return out;
+}
+
+// Derive the native Ollama API root from an OpenAI-compatible baseUrl
+// (http://host:11434/v1 -> http://host:11434).
+function ollamaNativeRoot(baseUrl: string): string | null {
+	try {
+		const url = new URL(baseUrl);
+		const pathname = url.pathname.replace(/\/+$/, "");
+		if (pathname.endsWith("/v1")) url.pathname = pathname.slice(0, -3) || "/";
+		return url.toString().replace(/\/+$/, "");
+	} catch {
+		return null;
+	}
+}
+
+// Ollama exposes native metadata: GET /api/tags (capabilities) and
+// POST /api/show (context_length via model_info).
+async function enrichOllamaModelDetails(
+	baseUrl: string,
+	apiKeyMode: ApiKeyMode,
+	apiKeyValue: string | undefined,
+	ids: string[],
+): Promise<Map<string, ModelProbeInfo>> {
+	const root = ollamaNativeRoot(baseUrl);
+	if (!root) return new Map();
+	const out = new Map<string, ModelProbeInfo>();
+
+	const headers: Record<string, string> = { accept: "application/json" };
+	const resolvedKey = resolveApiKeyForProbe(apiKeyMode, apiKeyValue);
+	if (resolvedKey) headers.authorization = `Bearer ${resolvedKey}`;
+
+	try {
+		const response = await fetch(`${root}/api/tags`, { headers });
+		if (response.ok) {
+			const json = await response.json().catch(() => null);
+			for (const model of Array.isArray(json?.models) ? json.models : []) {
+				const name = typeof model?.name === "string" ? model.name.trim() : "";
+				if (!name) continue;
+				const info: ModelProbeInfo = {};
+				if (Array.isArray(model.capabilities)) info.vision = model.capabilities.includes("vision");
+				if (Object.keys(info).length > 0) out.set(name, info);
+			}
+		}
+	} catch {
+		// Not an Ollama server; skip native probing entirely.
+	}
+
+	let cursor = 0;
+	async function worker() {
+		while (cursor < ids.length) {
+			const id = ids[cursor++];
+			try {
+				const controller = new AbortController();
+				const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+				const response = await fetch(`${root}/api/show`, {
+					method: "POST",
+					headers: { "content-type": "application/json", ...headers },
+					body: JSON.stringify({ name: id }),
+					signal: controller.signal,
+				});
+				clearTimeout(timer);
+				if (!response.ok) continue;
+				const json = await response.json().catch(() => null);
+				const info: ModelProbeInfo = { ...(out.get(id) ?? {}) };
+				const modelInfo = json?.model_info;
+				if (modelInfo && typeof modelInfo === "object") {
+					for (const [key, value] of Object.entries(modelInfo)) {
+						if (key.endsWith(".context_length") && typeof value === "number" && value > 0) {
+							info.contextWindow = value;
+						}
+					}
+				}
+				if (Array.isArray(json?.capabilities)) info.vision = json.capabilities.includes("vision");
+				out.set(id, info);
+			} catch {
+				// Best effort.
+			}
+		}
+	}
+	await Promise.all(Array.from({ length: Math.min(PROBE_CONCURRENCY, Math.max(1, ids.length)) }, worker));
+	return out;
 }
 
 function normalizeSelectItems(items: Array<string | SelectItem>): SelectItem[] {
@@ -415,10 +833,8 @@ async function pickMany(
 						const prefix = active ? theme.fg("accent", "> ") : "  ";
 						const box = checked ? theme.fg("success", "[x]") : theme.fg("muted", "[ ]");
 						const label = active ? theme.fg("accent", item.label) : theme.fg("text", item.label);
-						add(`${prefix}${box} ${label}`);
-						if (item.description) {
-							add(`     ${theme.fg("muted", item.description)}`);
-						}
+						const desc = item.description ? ` ${theme.fg("muted", item.description.replace(/\s*\n\s*/g, " "))}` : "";
+						add(`${prefix}${box} ${label}${desc}`);
 					}
 
 					if (visibleItems.length > maxVisible) {
@@ -507,6 +923,7 @@ async function promptApiKey(
 function reasoningLabel(level: ReasoningCeiling): string {
 	if (level === "off") return "Off - no reasoning";
 	if (level === "xhigh") return "xhigh - maximum (only if the model supports it)";
+	if (level === "max") return "max - maximum (only if the model supports it)";
 	return `${level} - cap reasoning at ${level}`;
 }
 
@@ -521,12 +938,12 @@ async function promptReasoning(ctx: CommandContext, current?: ReasoningCeiling):
 	return (choice as ReasoningCeiling | null) ?? null;
 }
 
-// When a model is capped at xhigh, some providers name that level differently
-// (e.g. "max"). Offer an optional override for the provider-facing string.
-async function promptXhighProviderString(ctx: CommandContext, current?: string): Promise<string | undefined> {
+// When a model is capped at xhigh or max, some providers name that level
+// differently (e.g. "max"). Offer an optional override for the provider-facing string.
+async function promptCeilingProviderString(ctx: CommandContext, level: "xhigh" | "max", current?: string): Promise<string | undefined> {
 	const value = await ctx.ui.input(
-		"xhigh provider value (blank = xhigh)",
-		current && current !== "xhigh" ? `current: ${current}` : 'e.g. max (leave blank to send "xhigh")',
+		`${level} provider value (blank = ${level})`,
+		current && current !== level ? `current: ${current}` : `e.g. max (leave blank to send "${level}")`,
 	);
 	if (value === undefined) return undefined;
 	const trimmed = value.trim();
@@ -585,28 +1002,31 @@ async function promptMaxTokens(ctx: CommandContext, current?: number): Promise<n
 function readModelOptions(model: any): ModelOptions {
 	const vision = Array.isArray(model?.input) ? model.input.includes("image") : true;
 	const contextWindow = typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
-	if (!model || model.reasoning !== true) return { reasoning: "off", vision, contextWindow };
+	const maxTokens = typeof model?.maxTokens === "number" ? model.maxTokens : undefined;
+	if (!model || model.reasoning !== true) return { reasoning: "off", vision, contextWindow, maxTokens };
 
 	const map = model.thinkingLevelMap;
 	let ceiling: ReasoningCeiling = "high";
 	if (map && typeof map === "object") {
-		if (map.xhigh !== undefined && map.xhigh !== null) {
+		if (map.max !== undefined && map.max !== null) {
+			ceiling = "max";
+		} else if (map.xhigh !== undefined && map.xhigh !== null) {
 			ceiling = "xhigh";
 		} else {
 			for (let i = REASONING_LEVELS.length - 1; i >= 1; i--) {
 				const level = REASONING_LEVELS[i];
-				if (level === "xhigh") continue;
+				if (level === "xhigh" || level === "max") continue;
 				if (map[level] === null) continue;
 				ceiling = level;
 				break;
 			}
 		}
 	}
-	return { reasoning: ceiling, vision, contextWindow };
+	return { reasoning: ceiling, vision, contextWindow, maxTokens };
 }
 
-function readXhighProviderString(model: any): string | undefined {
-	const v = model?.thinkingLevelMap?.xhigh;
+function readCeilingString(model: any, level: "xhigh" | "max"): string | undefined {
+	const v = model?.thinkingLevelMap?.[level];
 	return typeof v === "string" ? v : undefined;
 }
 
@@ -647,12 +1067,76 @@ async function promptModelIdsOneByOne(
 	}
 }
 
+// Provider reasoning-effort option names mapped onto pi thinking levels.
+const EFFORT_ALIASES: Record<string, string> = {
+	none: "off",
+	minimal: "minimal",
+	low: "low",
+	medium: "medium",
+	high: "high",
+	xhigh: "xhigh",
+	max: "max",
+	extended: "xhigh",
+};
+
+// Map provider reasoning-effort options onto pi thinking levels. Levels the
+// provider doesn't name are hidden with null.
+function buildThinkingMapFromEffortOptions(options: string[]): Record<string, string | null> {
+	const supported = new Map<string, string>();
+	for (const raw of options) {
+		const option = raw.trim();
+		const level = EFFORT_ALIASES[option.toLowerCase()];
+		if (level && !supported.has(level)) supported.set(level, option);
+	}
+	const map: Record<string, string | null> = {};
+	for (const level of PI_THINKING_LEVELS) {
+		map[level] = supported.get(level) ?? null;
+	}
+	return map;
+}
+
+function ceilingFromThinkingMap(map: Record<string, string | null>): ReasoningCeiling {
+	for (let i = PI_THINKING_LEVELS.length - 1; i >= 1; i--) {
+		const level = PI_THINKING_LEVELS[i];
+		if (map[level] !== undefined && map[level] !== null) return level as ReasoningCeiling;
+	}
+	return "off";
+}
+
+// Turn probe metadata into model knobs. Fields the probe couldn't determine fall
+// back to the wizard's defaults (reasoning on at the xhigh ceiling, text+image).
+function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback: ModelOptions): ModelOptions {
+	if (!info) return fallback;
+	const opts: ModelOptions = {
+		reasoning: fallback.reasoning,
+		vision: info.vision ?? fallback.vision,
+		contextWindow: info.contextWindow ?? fallback.contextWindow,
+		maxTokens: info.maxTokens,
+	};
+
+	if (info.reasoning === false) {
+		opts.reasoning = "off";
+	} else if (info.reasoning === true) {
+		if (info.alwaysThinking) {
+			// Thinking exists but cannot be disabled — hide "off" from the UI.
+			opts.reasoning = "minimal";
+			opts.thinkingLevelMap = { off: null };
+		} else if (info.effortOptions && info.effortOptions.length > 0) {
+			const map = buildThinkingMapFromEffortOptions(info.effortOptions);
+			opts.reasoning = ceilingFromThinkingMap(map);
+			opts.thinkingLevelMap = map;
+		}
+		// reasoning === true with no level info: keep the wizard's default ceiling.
+	}
+	return opts;
+}
+
 // Apply a reasoning ceiling to an entry in place, preserving other fields.
 // Mirrors pi's getSupportedThinkingLevels: off/minimal/low/medium/high are on
-// by default when reasoning is true; xhigh is available ONLY if explicitly
+// by default when reasoning is true; xhigh/max are available ONLY if explicitly
 // mapped; any level set to null is removed. So we only need a map to (a) unlock
-// xhigh, or (b) cap below high by nulling the higher levels.
-function applyReasoning(entry: any, ceiling: ReasoningCeiling, providerStringOverride?: string) {
+// xhigh/max, or (b) cap below high by nulling the higher levels.
+function applyReasoning(entry: any, ceiling: ReasoningCeiling, ceilingOverrides?: Partial<Record<"xhigh" | "max", string>>) {
 	if (ceiling === "off") {
 		delete entry.reasoning;
 		delete entry.thinkingLevelMap;
@@ -664,8 +1148,9 @@ function applyReasoning(entry: any, ceiling: ReasoningCeiling, providerStringOve
 	for (const level of REASONING_LEVELS) {
 		if (level === "off") continue;
 		const index = REASONING_LEVELS.indexOf(level);
-		if (level === "xhigh") {
-			if (ceilingIndex >= index) map.xhigh = providerStringOverride?.trim() || "xhigh";
+		if (level === "xhigh" || level === "max") {
+			// Opt-in levels: only appear when the ceiling reaches them.
+			if (ceilingIndex >= index) map[level] = ceilingOverrides?.[level]?.trim() || level;
 		} else if (index > ceilingIndex) {
 			map[level] = null;
 		}
@@ -674,7 +1159,11 @@ function applyReasoning(entry: any, ceiling: ReasoningCeiling, providerStringOve
 	else delete entry.thinkingLevelMap;
 }
 
-function buildModelEntry(id: string, opts: ModelOptions, providerStringOverride?: string): any {
+function buildModelEntry(
+	id: string,
+	opts: ModelOptions,
+	ceilingOverrides?: Partial<Record<"xhigh" | "max", string>>,
+): any {
 	const entry: any = {
 		id,
 		// Default to text+image so pi forwards images upstream. Without this,
@@ -685,8 +1174,18 @@ function buildModelEntry(id: string, opts: ModelOptions, providerStringOverride?
 	if (typeof opts.contextWindow === "number" && opts.contextWindow > 0) {
 		entry.contextWindow = opts.contextWindow;
 	}
+	if (typeof opts.maxTokens === "number" && opts.maxTokens > 0) {
+		entry.maxTokens = opts.maxTokens;
+	}
 
-	applyReasoning(entry, opts.reasoning, providerStringOverride);
+	if (opts.thinkingLevelMap) {
+		// The probe knew the provider's exact thinking levels (e.g. OpenAI
+		// effort_options) — write that map verbatim instead of deriving one.
+		entry.reasoning = true;
+		entry.thinkingLevelMap = opts.thinkingLevelMap;
+	} else {
+		applyReasoning(entry, opts.reasoning, ceilingOverrides);
+	}
 	return entry;
 }
 
@@ -697,14 +1196,17 @@ function buildProviderConfig(
 	apiKey: { mode: ApiKeyMode; value?: string },
 	modelIds: string[],
 	opts: ModelOptions,
-	providerStringOverride?: string,
+	ceilingOverrides?: Partial<Record<"xhigh" | "max", string>>,
+	infoById?: Map<string, ModelProbeInfo>,
 ) {
 	const serializedApiKey = serializeApiKey(apiKey.mode, apiKey.value, style);
 	const config: any = {
 		baseUrl,
 		api,
 		...(serializedApiKey ? { apiKey: serializedApiKey } : {}),
-		models: modelIds.map((id) => buildModelEntry(id, opts, providerStringOverride)),
+		models: modelIds.map((id) =>
+			buildModelEntry(id, modelOptionsFromProbe(infoById?.get(id), opts), ceilingOverrides),
+		),
 	};
 
 	if (style === "ollama") {
@@ -762,13 +1264,15 @@ function providerModelItems(provider: any): SelectItem[] {
 				searchText: `${id} ${details.join(" ")}`,
 			};
 		})
-		.filter((item): item is SelectItem => item !== null);
+		.filter((item: any): item is SelectItem => item !== null);
 }
 
 function normalizeStoredEndpoint(provider: any): string {
 	const endpoint = typeof provider?.baseUrl === "string" ? provider.baseUrl.trim() : "";
 	if (!endpoint) return "";
-	const api: ProviderApi = provider?.api === "anthropic-messages" ? "anthropic-messages" : "openai-completions";
+	const stored = provider?.api;
+	const api: ProviderApi =
+		stored === "anthropic-messages" || stored === "openai-responses" ? stored : "openai-completions";
 	try {
 		return normalizeEndpoint(endpoint, api);
 	} catch {
@@ -845,6 +1349,7 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 			{ value: "context", label: "Set context window (all models)", description: `Apply one contextWindow to all ${modelCount} model${modelCount === 1 ? "" : "s"}` },
 			{ value: "models", label: "Edit per model", description: `${modelCount} model${modelCount === 1 ? "" : "s"} — reasoning, vision, context, max tokens, headers, delete` },
 			{ value: "add", label: "Add models manually", description: "Type model ids to add" },
+			{ value: "api", label: "API flavor", suffix: ` • ${typeof provider.api === "string" ? provider.api : "unset"}`, description: "Switch between Chat Completions, Responses, and Anthropic Messages" },
 			{ value: "rename", label: "Rename provider", description: "Change the provider name in the models config" },
 			{ value: "back", label: "Back", description: "Return to the provider list" },
 		]);
@@ -858,12 +1363,47 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 			await setProviderContextWindow(ctx, providerId);
 		} else if (action === "add") {
 			await addModelsToProvider(ctx, providerId);
+		} else if (action === "api") {
+			await changeProviderApi(ctx, providerId);
 		} else if (action === "rename") {
 			// Reassign so the menu keeps editing the same provider under its new name.
 			const renamed = await renameProvider(ctx, providerId);
 			if (renamed) providerId = renamed;
 		}
 	}
+}
+
+const API_OPTIONS: Array<{ value: ProviderApi; label: string; description: string }> = [
+	{ value: "openai-completions", label: "OpenAI Chat Completions", description: 'api: "openai-completions" — most OpenAI-compatible servers' },
+	{ value: "openai-responses", label: "OpenAI Responses API", description: 'api: "openai-responses" — the newer /responses endpoint' },
+	{ value: "anthropic-messages", label: "Anthropic Messages", description: 'api: "anthropic-messages" — requires an Anthropic-style endpoint' },
+];
+
+// Switch a provider's api flavor in the models config, keeping everything else.
+async function changeProviderApi(ctx: CommandContext, providerId: string) {
+	let provider: any;
+	try {
+		provider = loadModelsConfig().providers?.[providerId];
+	} catch (error) {
+		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		return;
+	}
+	const current = typeof provider?.api === "string" ? (provider.api as ProviderApi) : undefined;
+	const options = API_OPTIONS.map((option) => ({
+		value: option.value,
+		label: option.label,
+		description: option.description,
+		suffix: option.value === current ? " • current" : undefined,
+	})).sort((a, b) => (a.value === current ? -1 : b.value === current ? 1 : 0));
+
+	const choice = await selectOne(ctx, `API flavor for ${providerId}`, options);
+	if (!choice || choice === current) return;
+
+	const saved = await mutateProvider(ctx, providerId, (p) => {
+		p.api = choice;
+		return true;
+	});
+	if (saved) ctx.ui.notify(`Changed "${providerId}" to ${choice}.`, "info");
 }
 
 // Rename a provider's key in the models config, preserving its config and original
@@ -950,7 +1490,16 @@ async function setProviderContextWindow(ctx: CommandContext, providerId: string)
 		for (const m of list) {
 			const opts = readModelOptions(m);
 			opts.contextWindow = result === 0 ? undefined : result;
-			const rebuilt = buildModelEntry(modelIdOf(m), opts, readXhighProviderString(m));
+			const ceilingOverrides: Partial<Record<"xhigh" | "max", string>> = {};
+			for (const level of ["xhigh", "max"] as const) {
+				const value = readCeilingString(m, level);
+				if (value) ceilingOverrides[level] = value;
+			}
+			const rebuilt = buildModelEntry(
+				modelIdOf(m),
+				opts,
+				Object.keys(ceilingOverrides).length > 0 ? ceilingOverrides : undefined,
+			);
 			Object.assign(m, rebuilt);
 			if (result === 0) delete m.contextWindow;
 		}
@@ -1062,9 +1611,15 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 		if (field === "reasoning") {
 			const reasoning = await promptReasoning(ctx, opts.reasoning);
 			if (reasoning === null) continue;
-			let xhigh: string | undefined;
-			if (reasoning === "xhigh") xhigh = await promptXhighProviderString(ctx, readXhighProviderString(model));
-			await mutateModel(ctx, providerId, modelId, (m) => applyReasoning(m, reasoning, xhigh));
+			let ceilingOverrides: Partial<Record<"xhigh" | "max", string>> | undefined;
+			if (reasoning === "xhigh" || reasoning === "max") {
+				const value = await promptCeilingProviderString(ctx, reasoning, readCeilingString(model, reasoning));
+				if (value) {
+					ceilingOverrides = {};
+					ceilingOverrides[reasoning] = value;
+				}
+			}
+			await mutateModel(ctx, providerId, modelId, (m) => applyReasoning(m, reasoning, ceilingOverrides));
 		} else if (field === "vision") {
 			const vision = await promptVision(ctx, opts.vision);
 			if (vision === null) continue;
@@ -1169,7 +1724,12 @@ function apiKeyFromProvider(provider: any): { mode: ApiKeyMode; value?: string }
 	return { mode: "literal", value: raw };
 }
 
-async function addModelEntriesToProvider(ctx: CommandContext, providerId: string, ids: string[]) {
+async function addModelEntriesToProvider(
+	ctx: CommandContext,
+	providerId: string,
+	ids: string[],
+	infoById?: Map<string, ModelProbeInfo>,
+) {
 	const existing = new Set<string>();
 	try {
 		const provider = loadModelsConfig().providers?.[providerId];
@@ -1183,15 +1743,30 @@ async function addModelEntriesToProvider(ctx: CommandContext, providerId: string
 		return;
 	}
 
-	// Added models default to reasoning on (xhigh ceiling) + text+image. Tune per
-	// model later via Edit provider → Edit a model.
+	// Added models default to reasoning on (xhigh ceiling) + text+image. When the
+	// probe detected metadata (context window, vision, reasoning levels) it is
+	// applied instead. Tune per model later via Edit provider → Edit a model.
+	const defaultOpts: ModelOptions = { reasoning: "xhigh", vision: true };
+	let detectedCount = 0;
 	const saved = await mutateProvider(ctx, providerId, (p) => {
 		const models = Array.isArray(p.models) ? p.models : [];
-		for (const id of fresh) models.push(buildModelEntry(id, { reasoning: "xhigh", vision: true }));
+		for (const id of fresh) {
+			const info = infoById?.get(id);
+			// Manual entries (and gateways that expose no metadata) still get
+			// context/vision/reasoning for well-known models from the built-in table.
+			const known = info?.contextWindow === undefined ? lookupKnownModelContext(id) : undefined;
+			const mergedInfo = known ? { ...(info ?? {}), ...known, inferred: true } : info;
+			if (mergedInfo && probeInfoSummary(mergedInfo).length > 0) detectedCount++;
+			models.push(buildModelEntry(id, modelOptionsFromProbe(mergedInfo, defaultOpts)));
+		}
 		p.models = models;
 		return true;
 	});
-	if (saved) ctx.ui.notify(`Added ${fresh.length} model${fresh.length === 1 ? "" : "s"} to "${providerId}".`, "info");
+	if (saved) {
+		const detail =
+			detectedCount > 0 ? ` — auto-detected metadata for ${detectedCount} model${detectedCount === 1 ? "" : "s"}` : "";
+		ctx.ui.notify(`Added ${fresh.length} model${fresh.length === 1 ? "" : "s"} to "${providerId}"${detail}.`, "info");
+	}
 }
 
 async function reprobeProvider(ctx: CommandContext, providerId: string) {
@@ -1202,8 +1777,9 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return;
 	}
-	if (provider?.api === "anthropic-messages") {
-		ctx.ui.notify("Anthropic-style endpoints don't expose /models. Use 'Add models manually'.", "warning");
+	const api = typeof provider?.api === "string" ? (provider.api as ProviderApi) : "openai-completions";
+	if (api !== "openai-completions" && api !== "openai-responses") {
+		ctx.ui.notify("This provider's API doesn't expose /models. Use 'Add models manually'.", "warning");
 		return;
 	}
 	const baseUrl = typeof provider?.baseUrl === "string" ? provider.baseUrl : "";
@@ -1213,7 +1789,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	}
 
 	const apiKey = apiKeyFromProvider(provider);
-	let probed: ProbeItem[];
+	let probed: ProbeResult;
 	try {
 		ctx.ui.notify(`Probing ${buildProbeUrl(baseUrl)} ...`, "info");
 		probed = await probeOpenAIModels(baseUrl, apiKey.mode, apiKey.value);
@@ -1223,7 +1799,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	}
 
 	const existing = new Set((Array.isArray(provider.models) ? provider.models : []).map(modelIdOf));
-	const novel = probed.filter((item) => !existing.has(item.value));
+	const novel = probed.items.filter((item) => !existing.has(item.value));
 	if (novel.length === 0) {
 		ctx.ui.notify("No new models — everything the endpoint returned is already configured.", "info");
 		return;
@@ -1231,7 +1807,10 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 
 	const picked = await pickMany(ctx, `New models for ${providerId}`, novel);
 	if (!picked || picked.length === 0) return;
-	await addModelEntriesToProvider(ctx, providerId, picked);
+
+	const style: ProviderStyle = provider?.compat ? "ollama" : "openai";
+	const infoById = await collectProbedModelInfo(ctx, style, api, apiKey, baseUrl, picked, probed.infoById);
+	await addModelEntriesToProvider(ctx, providerId, picked, infoById);
 }
 
 async function addModelsToProvider(ctx: CommandContext, providerId: string) {
@@ -1312,20 +1891,21 @@ async function deleteProviderFlow(ctx: CommandContext) {
 async function promptProviderStyle(
 	ctx: CommandContext,
 ): Promise<{ style: ProviderStyle; api: ProviderApi } | null> {
-	const providerStyleLabel = await selectOne(ctx, "Provider style", [
-		"OpenAI-compatible",
-		"Anthropic-compatible",
-		"Ollama-compatible",
+	const choice = await selectOne(ctx, "Provider style", [
+		{ value: "openai", label: "OpenAI-compatible (Chat Completions)", description: 'api: "openai-completions" — most OpenAI-compatible servers' },
+		{ value: "openai-responses", label: "OpenAI Responses API", description: 'api: "openai-responses" — the newer /responses endpoint' },
+		{ value: "anthropic", label: "Anthropic-compatible", description: 'api: "anthropic-messages"' },
+		{ value: "ollama", label: "Ollama-compatible", description: 'api: "openai-completions" with Ollama-specific compat defaults' },
 	]);
-	if (!providerStyleLabel) return null;
+	if (!choice) return null;
 
-	const style: ProviderStyle =
-		providerStyleLabel === "Anthropic-compatible"
-			? "anthropic"
-			: providerStyleLabel === "Ollama-compatible"
-				? "ollama"
-				: "openai";
-	const api: ProviderApi = style === "anthropic" ? "anthropic-messages" : "openai-completions";
+	const style = choice as ProviderStyle;
+	const api: ProviderApi =
+		style === "anthropic"
+			? "anthropic-messages"
+			: style === "openai-responses"
+				? "openai-responses"
+				: "openai-completions";
 	return { style, api };
 }
 
@@ -1340,7 +1920,9 @@ async function promptEndpoint(
 			? "e.g. https://api.anthropic-proxy.com/v1"
 			: style === "ollama"
 				? "e.g. http://localhost:11434/v1"
-				: "e.g. https://api.example.com/v1 or http://localhost:11434/v1",
+				: style === "openai-responses"
+					? "e.g. https://api.openai.com/v1"
+					: "e.g. https://api.example.com/v1 or http://localhost:11434/v1",
 	);
 	if (endpointInput === undefined) return null;
 	const raw = endpointInput.trim();
@@ -1465,22 +2047,40 @@ async function addProviderFlow(ctx: CommandContext) {
 		);
 	}
 
-	const modelIds = await collectModelIds(ctx, style, api, apiKey, endpoint.normalized, endpoint.raw);
-	if (!modelIds || modelIds.length === 0) return;
+	const collected = await collectModelIds(ctx, style, api, apiKey, endpoint.normalized, endpoint.raw);
+	if (!collected || collected.ids.length === 0) return;
 
 	const providerConfig = buildProviderConfig(
 		style,
 		api,
 		endpoint.normalized,
 		apiKey,
-		dedupe(modelIds),
+		dedupe(collected.ids),
 		// New providers default to text+image, reasoning on (xhigh ceiling). Tune
 		// per model later via Edit provider → Edit a model.
 		{ reasoning: "xhigh", vision: true },
+		undefined,
+		collected.infoById,
 	);
 	if (!(await persistProvider(ctx, providerId, providerConfig))) return;
 
-	ctx.ui.notify(`Saved provider \"${providerId}\" to ${MODELS_JSON_PATH}`, "info");
+	const infoById = collected.infoById;
+	const probedCount = infoById
+		? collected.ids.filter((id) => {
+				const info = infoById.get(id);
+				return info && !info.inferred && probeInfoSummary(info).length > 0;
+			}).length
+		: 0;
+	const inferredCount = infoById ? collected.ids.filter((id) => infoById.get(id)?.inferred).length : 0;
+	const unsetCount = collected.ids.length - probedCount - inferredCount;
+	const summary: string[] = [];
+	if (probedCount > 0) summary.push(`detected ${probedCount}`);
+	if (inferredCount > 0) summary.push(`inferred from known models ${inferredCount}`);
+	if (unsetCount > 0) summary.push(`unset ${unsetCount}`);
+	ctx.ui.notify(
+		`Saved provider \"${providerId}\" to ${MODELS_JSON_PATH}` + (summary.length > 0 ? ` — context/vision/reasoning: ${summary.join(", ")}` : ""),
+		"info",
+	);
 	ctx.ui.notify("Open /model to use your new provider.", "info");
 }
 
@@ -1491,33 +2091,133 @@ async function collectModelIds(
 	apiKey: { mode: ApiKeyMode; value?: string },
 	normalizedEndpoint: string,
 	trimmedEndpointInput: string,
-): Promise<string[] | null> {
-	if (api !== "openai-completions") {
-		return promptModelIdsOneByOne(ctx, style);
+): Promise<{ ids: string[]; infoById?: Map<string, ModelProbeInfo> } | null> {
+	if (api !== "openai-completions" && api !== "openai-responses") {
+		const ids = await promptModelIdsOneByOne(ctx, style);
+		return ids ? { ids } : null;
 	}
 
 	const modelMode = await selectOne(ctx, "Models", ["Auto probe from /models", "Add manually"]);
 	if (!modelMode) return null;
 	if (modelMode !== "Auto probe from /models") {
-		return promptModelIdsOneByOne(ctx, style);
+		const ids = await promptModelIdsOneByOne(ctx, style);
+		return ids ? { ids } : null;
 	}
 
 	try {
 		ctx.ui.notify(`Probing ${buildProbeUrl(normalizedEndpoint)} ...`, "info");
-		const probedModels = await probeOpenAIModels(normalizedEndpoint, apiKey.mode, apiKey.value);
-		if (probedModels.length === 0) {
+		const probed = await probeOpenAIModels(normalizedEndpoint, apiKey.mode, apiKey.value);
+		if (probed.items.length === 0) {
 			ctx.ui.notify("Probe succeeded but returned no models. Switching to manual entry.", "warning");
-			return promptModelIdsOneByOne(ctx, style);
+			const ids = await promptModelIdsOneByOne(ctx, style);
+			return ids ? { ids } : null;
 		}
-		return pickMany(ctx, "Select models", probedModels);
+		const picked = await pickMany(ctx, "Select models", probed.items);
+		if (!picked || picked.length === 0) return null;
+
+		const infoById = await collectProbedModelInfo(ctx, style, api, apiKey, normalizedEndpoint, picked, probed.infoById);
+		return { ids: picked, infoById };
 	} catch (error) {
 		const schemeHint = hasExplicitScheme(trimmedEndpointInput) ? "" : "\n\nNo http:// or https:// was provided.";
 		ctx.ui.notify(
 			`Auto probe failed: ${error instanceof Error ? error.message : String(error)}.${schemeHint}\n\nSwitching to manual entry.`,
 			"warning",
 		);
-		return promptModelIdsOneByOne(ctx, style);
+		const ids = await promptModelIdsOneByOne(ctx, style);
+		return ids ? { ids } : null;
 	}
+}
+
+// Merge list-level metadata with per-model detail fetches. Best effort — when a
+// server exposes nothing, the wizard falls back to its defaults per model.
+// Conservative context-window fallback for well-known model ids. Used when a
+// gateway exposes no metadata at all (stock One API / New API, bare proxies)
+// so the wizard can still write a sensible contextWindow. Only stable values
+// are listed; unknown models are left unset. Entry order matters — more
+// specific patterns (e.g. claude-sonnet-4-5) must come before their prefix
+// (claude-sonnet-4).
+const KNOWN_MODEL_CONTEXTS: Array<{
+	pattern: RegExp;
+	contextWindow: number;
+	vision?: boolean;
+	reasoning?: boolean;
+}> = [
+	// OpenAI
+	{ pattern: /^gpt-5/i, contextWindow: 272000, vision: true, reasoning: true },
+	{ pattern: /^gpt-4o-mini/i, contextWindow: 128000, vision: true },
+	{ pattern: /^gpt-4o/i, contextWindow: 128000, vision: true },
+	{ pattern: /^gpt-4-turbo/i, contextWindow: 128000, vision: true },
+	{ pattern: /^gpt-4-32k/i, contextWindow: 32768 },
+	{ pattern: /^gpt-4/i, contextWindow: 8192 },
+	{ pattern: /^gpt-3\.5-turbo/i, contextWindow: 16385 },
+	{ pattern: /^o[134]-mini/i, contextWindow: 200000, reasoning: true },
+	{ pattern: /^o[134]/i, contextWindow: 200000, reasoning: true },
+	{ pattern: /^gpt-oss/i, contextWindow: 128000, vision: true, reasoning: true },
+	// Anthropic
+	{ pattern: /^claude-(opus|sonnet|haiku)-4-5/i, contextWindow: 1000000, vision: true, reasoning: true },
+	{ pattern: /^claude-(opus|sonnet|haiku)-4/i, contextWindow: 200000, vision: true, reasoning: true },
+	{ pattern: /^claude-3/i, contextWindow: 200000, vision: true },
+	// DeepSeek
+	{ pattern: /^deepseek-v4/i, contextWindow: 1000000, reasoning: true },
+	{ pattern: /^deepseek-(chat|reasoner|v3|r1)/i, contextWindow: 128000, reasoning: true },
+	// Google
+	{ pattern: /^gemini-(1\.5|2\.0|2\.5|3)/i, contextWindow: 1000000, vision: true },
+	// Zhipu / Alibaba / Meta / Mistral / Moonshot
+	{ pattern: /^glm-4/i, contextWindow: 128000 },
+	{ pattern: /^qwen2\.5/i, contextWindow: 131072 },
+	{ pattern: /^qwen3-coder/i, contextWindow: 131072 },
+	{ pattern: /^llama(3|4)/i, contextWindow: 131072 },
+	{ pattern: /^mistral-(large|small|medium)/i, contextWindow: 128000 },
+	{ pattern: /^kimi-k2/i, contextWindow: 262144, reasoning: true },
+	{ pattern: /^moonshotai\/kimi-k2/i, contextWindow: 262144, reasoning: true },
+	{ pattern: /^moonshot-v1/i, contextWindow: 128000 },
+];
+
+// Look up well-known model metadata by id (best-effort fallback).
+function lookupKnownModelContext(modelId: string): ModelProbeInfo | undefined {
+	for (const entry of KNOWN_MODEL_CONTEXTS) {
+		if (entry.pattern.test(modelId)) {
+			const info: ModelProbeInfo = { contextWindow: entry.contextWindow };
+			if (entry.vision !== undefined) info.vision = entry.vision;
+			if (entry.reasoning !== undefined) info.reasoning = entry.reasoning;
+			return info;
+		}
+	}
+	return undefined;
+}
+
+async function collectProbedModelInfo(
+	ctx: CommandContext,
+	style: ProviderStyle,
+	api: ProviderApi,
+	apiKey: { mode: ApiKeyMode; value?: string },
+	baseUrl: string,
+	ids: string[],
+	listInfo: Map<string, ModelProbeInfo>,
+): Promise<Map<string, ModelProbeInfo>> {
+	ctx.ui.notify("Fetching model metadata (context, vision, reasoning) ...", "info");
+	let details: Map<string, ModelProbeInfo>;
+	if (style === "ollama") {
+		details = await enrichOllamaModelDetails(baseUrl, apiKey.mode, apiKey.value, ids);
+	} else if (api === "openai-completions" || api === "openai-responses") {
+		details = await enrichOpenAIModelDetails(baseUrl, apiKey.mode, apiKey.value, ids);
+	} else {
+		details = new Map();
+	}
+	const merged = new Map(listInfo);
+	for (const [id, info] of details) {
+		merged.set(id, { ...(merged.get(id) ?? {}), ...info });
+	}
+	// Fallback: when a gateway exposes no metadata (stock One API / New API,
+	// bare proxies), infer well-known models from the built-in table instead of
+	// leaving contextWindow unset.
+	for (const id of ids) {
+		const info = merged.get(id);
+		if (info?.contextWindow !== undefined) continue;
+		const known = lookupKnownModelContext(id);
+		if (known) merged.set(id, { ...(info ?? {}), ...known, inferred: true });
+	}
+	return merged;
 }
 
 export default function betterCustomWizard(pi: ExtensionAPI) {
