@@ -42,11 +42,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ratatulieoi/better-custom.git"
+    "url": "git+https://github.com/real-wudaoshi/better-custom.git"
   },
-  "homepage": "https://github.com/ratatulieoi/better-custom#readme",
+  "homepage": "https://github.com/real-wudaoshi/better-custom#readme",
   "bugs": {
-    "url": "https://github.com/ratatulieoi/better-custom/issues"
+    "url": "https://github.com/real-wudaoshi/better-custom/issues"
   },
   "pi": {
     "extensions": [

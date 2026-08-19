@@ -61,7 +61,7 @@ pi install npm:better-custom
 From GitHub:
 
 ```bash
-pi install https://github.com/ratatulieoi/better-custom
+pi install https://github.com/real-wudaoshi/better-custom
 ```
 
 From a local checkout:

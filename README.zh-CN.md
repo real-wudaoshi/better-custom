@@ -54,7 +54,7 @@ pi install npm:better-custom
 从 GitHub 安装:
 
 ```bash
-pi install https://github.com/ratatulieoi/better-custom
+pi install https://github.com/real-wudaoshi/better-custom
 ```
 
 从本地检出安装:
