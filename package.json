@@ -1,6 +1,6 @@
 {
   "name": "better-custom",
-  "version": "0.8.2",
+  "version": "0.9.7",
   "description": "Pi and Oh My Pi extension for managing custom providers through an interactive wizard.",
   "type": "module",
   "keywords": [
@@ -35,7 +35,9 @@
   },
   "files": [
     "index.ts",
+    "src",
     "README.md",
+    "README.zh-CN.md",
     "LICENSE"
   ],
   "repository": {
@@ -68,6 +70,6 @@
   },
   "scripts": {
     "build": "echo 'No build step required'",
-    "check": "node --check index.ts"
+    "check": "node --check index.ts && node --check src/types.ts && node --check src/config.ts && node --check src/url.ts && node --check src/api-key.ts && node --check src/known-models.ts && node --check src/probe.ts && node --check src/model-entry.ts && node --check src/ui/select.ts && node --check src/ui/prompts.ts && node --check src/flows/shared.ts && node --check src/flows/add.ts && node --check src/flows/edit.ts && node --check src/flows/delete.ts"
   }
 }

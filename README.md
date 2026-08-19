@@ -1,11 +1,17 @@
 # better-custom
 
+[中文文档](README.zh-CN.md)
+
 A better way to add custom providers for Pi and Oh My Pi (OMP).
+
+An interactive wizard that adds, edits, and deletes custom LLM providers in the
+running host's models config — no hand-editing of `models.json` / `models.yml`
+required.
 
 ## Features
 
 - Add, edit, or delete custom providers from an interactive wizard
-- Supports:
+- Supported provider styles:
   - OpenAI-compatible endpoints — Chat Completions (`openai-completions`)
   - OpenAI Responses API (`openai-responses`) — the newer `/responses` endpoint
   - Anthropic-compatible endpoints
@@ -18,6 +24,16 @@ A better way to add custom providers for Pi and Oh My Pi (OMP).
   - none (writes a placeholder so the provider still loads)
   - existing `$ENV` and `!command` keys are still resolved when re-probing
 - Auto-probe `/models` for OpenAI-compatible endpoints
+- Gateway presets when adding a provider — LiteLLM, One API, New API,
+  OpenRouter, or generic OpenAI-compatible (vLLM, LM Studio, ...) — so the
+  wizard only probes the metadata sources that gateway actually exposes
+  (Auto-detect tries everything). Presets apply to any API flavor — gateways
+  like New API serve completions, responses, and anthropic formats behind one
+  endpoint — and One API / New API accept a bare host (`/v1` is added
+  automatically). The probe itself is path-adaptive: if `/models` doesn't
+  answer on the given base, the variant with `/v1` added or removed is tried
+  automatically (some gateways, e.g. USTC's LiteLLM, hang on `/v1/models`
+  while serving `/models` at the root)
 - Auto-detects model metadata while probing:
   - context window, max output tokens, vision, and reasoning support/levels
   - sources: OpenAI `GET /models/{id}` (incl. `capabilities.reasoning.effort_options`),
@@ -68,7 +84,7 @@ After installing, reload pi if needed, then run:
 /better-custom
 ```
 
-The wizard can:
+The wizard offers three actions:
 
 1. Add a provider
 2. Edit a provider
@@ -79,7 +95,10 @@ The wizard can:
 Guides you through:
 
 - provider style (OpenAI Chat Completions / OpenAI Responses / Anthropic / Ollama)
-- endpoint
+- gateway type (all styles except Ollama): Auto-detect, LiteLLM, One API,
+  New API, OpenRouter, or generic — controls which metadata sources are probed
+- endpoint (for LiteLLM / One API / New API a bare host works — `/v1` is added
+  automatically)
 - provider name (must be unique)
 - API key method (API key or none)
 - model discovery (auto-probe `/models`) or manual model entry
@@ -132,29 +151,55 @@ real per-model values before writing the config:
 |--------|------------------|
 | OpenAI `GET /models/{id}` | `context_window`, `max_output_tokens`, `capabilities.vision`, `capabilities.reasoning` (type + `effort_options`) |
 | Inline `/models` list entries | OpenRouter (`context_length`, `reasoning`, `architecture.input_modalities`), OpenModels/Epithre-style fields, LiteLLM `max_input_tokens`/`max_output_tokens` |
-| LiteLLM `GET /model/info` | One call returns `model_info` for every model: `context_window`, `max_tokens`/`max_output_tokens`, `supports_vision`, `supports_reasoning` |
+| LiteLLM `GET /model/info` | One call returns `model_info` for every model: `context_window`, `max_tokens`/`max_output_tokens`, `supports_vision`, `supports_reasoning` — tried at the baseUrl's origin first (`/v1/model/info` is 404 on LiteLLM), then under the base URL |
+| Site catalog `GET {site}/api/models/public` | No-auth authoritative `context_window` (plus capability flags when published) for every published model (USTC-style sites; `api.` → `llm.` host fallback) — overrides LiteLLM-reported values |
+| LiteLLM `GET /model_group/info` | Server-root endpoint (requires api key) with per-`model_group` capabilities: `max_input_tokens`, `supports_reasoning`, `supports_vision` — tried at the baseUrl's origin first (`/v1/model_group/info` is 404) |
 | One API / New API | `supported_endpoint_types` (chat/embeddings/…) shown in the picker; fork/`meta` fields (`context_window`, `max_tokens`, `capabilities.vision`/`reasoning`, `supports_vision`/`supports_reasoning`) parsed from list entries and `GET /models/{id}` |
 | Ollama `/api/tags` + `/api/show` | vision capability, `model_info` context length (`.context_length` keys) |
 
 LiteLLM proxies are detected automatically: the wizard calls `GET /model/info`
-first (a single request covering all models) and only falls back to per-model
-`GET /models/{id}` fetches when that endpoint is not available.
+first (a single request covering all models — at the server root, then under
+the base URL), then `GET /model_group/info` at the server root when an api key
+is available, then the site's no-auth public catalog
+`GET {site}/api/models/public` (whose `context_window` values override
+LiteLLM's — they are often more complete and accurate), and only falls back to
+per-model `GET /models/{id}` fetches when none of those are available.
 
 Note on One API / New API: the stock gateways return model ids only, so context
 windows can't be discovered from them alone. If your deployment (or a fork)
 exposes `meta` fields — `context_window`, `max_tokens`, `capabilities.vision` /
 `capabilities.reasoning` — the wizard picks those up automatically.
 
-### Known-model fallback
+### Known-model fallback (local rules)
 
 When a gateway exposes no metadata at all (stock One API / New API, bare
-proxies, manually added models), the wizard falls back to a built-in table of
-well-known models (`gpt-4o`, `claude-sonnet-4-5`, `deepseek-chat`, `gemini-*`,
-`qwen*`, `llama*`, …) and writes their conservative `contextWindow` (plus
-`vision`/`reasoning` where certain). The table only fills fields the gateway
-left unknown — real detected values always win. Unknown model ids are left
-unset, and the save notification tells you exactly which models were detected,
-inferred, or left unset.
+proxies, manually added models), the wizard classifies the model id against a
+built-in rule table covering the major families and presets three fields:
+`contextWindow`, `vision`, and `reasoning`:
+
+- **OpenAI** — gpt-5.x (272K), gpt-5-mini (128K), gpt-4o (128K, vision),
+  gpt-4.1 (1M), o1/o3/o4 (200K, reasoning)
+- **Anthropic** — claude-4/4.5/4.6 (1M or 200K, vision, reasoning),
+  claude-3.7-sonnet (200K, reasoning), claude-3.x (200K)
+- **DeepSeek** — v4 (1M, reasoning), v3/chat/reasoner/r1 (128K, reasoning)
+- **Qwen** — qwen3.x / qwen2.5 (128K, reasoning for thinking variants),
+  `-non-thinking` variants flagged as non-reasoning, `-vl` variants vision,
+  qwen2.5-turbo (1M), qwen-long (10M)
+- **Kimi** — kimi-k2/k2.5 (256K, reasoning), kimi-k1.5, moonshot-v1
+- **GLM** — glm-5/4.5/z1 (reasoning), glm-4 (128K), glm-4v (vision),
+  glm-4-long (1M)
+- plus Gemini, Llama, Mistral, GPT-OSS
+
+The rules only fill fields the gateway left unknown — real detected values
+always win — and unknown ids are left unset. In the picker, values detected
+from the gateway are shown untagged, while values filled by these local rules
+are tagged `[local rules]`. The save notification tells you
+exactly which models were detected, inferred, or left unset.
+
+`maxTokens` is deliberately not preset: pi sends it to the API as the output
+cap (`max_completion_tokens` / `max_tokens`), and values above a model's real
+maximum cause an API error. If you want to cap a model's output, set it per
+model via Edit provider → Edit a model → Max output tokens.
 
 Everything is best-effort: unknown fields (404s, bare vLLM/LM Studio responses,
 missing capabilities) fall back to the wizard defaults — text+image input,
@@ -190,10 +235,31 @@ installs it automatically; if the folder was copied into
 - New OMP configs are written as JSON, which every YAML parser (including OMP
   and pi) reads fine.
 
-## Files
+## Development
 
-- `index.ts` — extension entry point
-- `package.json` — pi package manifest
+The extension is plain TypeScript loaded directly by pi — no build step.
+
+```bash
+npm run check   # syntax-check every source file with node --check
+```
+
+### Project layout
+
+- `index.ts` — extension entry point (registers the `/better-custom` command)
+- `src/types.ts` — shared types and constants
+- `src/config.ts` — models config discovery + JSON/YAML load/save
+- `src/url.ts` — endpoint normalization and other small helpers
+- `src/api-key.ts` — API key resolve/serialize helpers
+- `src/probe.ts` — `/models` probing and metadata enrichment
+- `src/presets.ts` — gateway presets (LiteLLM, One API, New API, ...)
+- `src/known-models.ts` — built-in fallback rules for well-known model ids
+- `src/model-entry.ts` — build/read/mutate model entries and provider configs
+- `src/ui/select.ts` — searchable single/multi-select pickers
+- `src/ui/prompts.ts` — wizard input prompts
+- `src/flows/shared.ts` — shared config-mutation helpers for the flows
+- `src/flows/add.ts` — add-provider flow
+- `src/flows/edit.ts` — edit-provider flow (incl. re-probe and per-model edits)
+- `src/flows/delete.ts` — delete-provider flow
 
 ## License
 
