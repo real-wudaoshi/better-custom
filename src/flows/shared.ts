@@ -137,8 +137,31 @@ export function findProvidersByEndpoint(config: ModelsConfig, endpoint: string):
 		.sort((a, b) => a.localeCompare(b));
 }
 
-export async function persistProvider(ctx: CommandContext, providerId: string, providerConfig: any): Promise<boolean> {
+// Delete a whole provider from the models config.
+export async function removeProvider(ctx: CommandContext, providerId: string): Promise<boolean> {
 	let config: ModelsConfig;
+	try {
+		config = loadModelsConfig();
+	} catch (error) {
+		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		return false;
+	}
+	if (!config.providers?.[providerId]) {
+		ctx.ui.notify(`Provider "${providerId}" no longer exists.`, "warning");
+		return false;
+	}
+	delete config.providers[providerId];
+	try {
+		saveModelsConfig(config);
+	} catch (error) {
+		ctx.ui.notify(`Could not write ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		return false;
+	}
+	ctx.ui.notify(`Deleted provider "${providerId}" from ${MODELS_JSON_PATH}`, "info");
+	return true;
+}
+
+export async function persistProvider(ctx: CommandContext, providerId: string, providerConfig: any): Promise<boolean> {	let config: ModelsConfig;
 	try {
 		config = loadModelsConfig();
 	} catch (error) {

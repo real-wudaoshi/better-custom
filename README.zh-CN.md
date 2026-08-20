@@ -126,6 +126,8 @@ vision、provider 的 reasoning 档位(如 OpenAI 的 `effort_options`)——
   - 删除该模型
 - 手动添加模型
 - 重命名 provider —— 修改当前 models 配置中的 provider 名称(键)
+- 删除 provider —— 从当前 models 配置中移除整个 provider(向导主菜单也有
+  独立的删除入口)
 
 逐模型编辑只原地修改单个字段,未触碰的字段(cost、headers、覆盖项)都会保留。
 

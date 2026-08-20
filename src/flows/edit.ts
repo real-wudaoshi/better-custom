@@ -17,12 +17,14 @@ import { buildProbeUrl, slugify } from "../url.ts";
 import {
 	addModelEntriesToProvider,
 	collectProbedModelInfo,
+	describeProvider,
 	describeProviderInline,
 	fetchGatewayWideInfo,
 	mutateModel,
 	mutateProvider,
 	probePickerItems,
 	providerModelItems,
+	removeProvider,
 } from "./shared.ts";
 
 export async function editProviderFlow(ctx: CommandContext) {
@@ -89,6 +91,7 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 			{ value: "add", label: "Add models manually", description: "Type model ids to add" },
 			{ value: "api", label: "API flavor", suffix: ` • ${typeof provider.api === "string" ? provider.api : "unset"}`, description: "Switch between Chat Completions, Responses, Anthropic Messages, and Gemini" },
 			{ value: "rename", label: "Rename provider", description: "Change the provider name in the models config" },
+			{ value: "delete", label: "Delete provider", description: "Remove this provider from the models config" },
 			{ value: "back", label: "Back", description: "Return to the provider list" },
 		]);
 		if (!action || action === "back") return;
@@ -103,6 +106,9 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 			await addModelsToProvider(ctx, providerId);
 		} else if (action === "api") {
 			await changeProviderApi(ctx, providerId);
+		} else if (action === "delete") {
+			const confirmed = await ctx.ui.confirm("Delete provider?", describeProvider(providerId, provider));
+			if (confirmed && (await removeProvider(ctx, providerId))) return; // provider is gone — back to the list
 		} else if (action === "rename") {
 			// Reassign so the menu keeps editing the same provider under its new name.
 			const renamed = await renameProvider(ctx, providerId);

@@ -134,6 +134,8 @@ Pick a provider, then choose:
   - Delete this model
 - Add models manually
 - Rename provider — change the provider name (key) in the active models config
+- Delete provider — remove the whole provider from the active models config
+  (also available as a standalone wizard action)
 
 Per-model edits change one field in place, so untouched fields (cost, headers,
 overrides) are preserved.
