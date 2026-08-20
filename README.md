@@ -237,7 +237,9 @@ installs it automatically; if the folder was copied into
 
 ## Development
 
-The extension is plain TypeScript loaded directly by pi — no build step.
+The extension is plain TypeScript loaded directly by pi — no build step. Model
+probing (`/models` + metadata enrichment + known-model rules) lives in the
+separate [model-probe](https://github.com/real-wudaoshi/model-probe) package.
 
 ```bash
 npm run check   # syntax-check every source file with node --check
@@ -250,9 +252,7 @@ npm run check   # syntax-check every source file with node --check
 - `src/config.ts` — models config discovery + JSON/YAML load/save
 - `src/url.ts` — endpoint normalization and other small helpers
 - `src/api-key.ts` — API key resolve/serialize helpers
-- `src/probe.ts` — `/models` probing and metadata enrichment
 - `src/presets.ts` — gateway presets (LiteLLM, One API, New API, ...)
-- `src/known-models.ts` — built-in fallback rules for well-known model ids
 - `src/model-entry.ts` — build/read/mutate model entries and provider configs
 - `src/ui/select.ts` — searchable single/multi-select pickers
 - `src/ui/prompts.ts` — wizard input prompts

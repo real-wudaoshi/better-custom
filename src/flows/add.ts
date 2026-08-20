@@ -1,7 +1,7 @@
+import { probeInfoSummary, probeModels } from "model-probe";
+import { resolveApiKeyForProbe } from "../api-key.ts";
 import { loadModelsConfig, MODELS_JSON_PATH } from "../config.ts";
-import { applyKnownModelFallback } from "../known-models.ts";
 import { buildProviderConfig } from "../model-entry.ts";
-import { describeProbeInfo, probeInfoSummary, probeOpenAIModels } from "../probe.ts";
 import { gatewayPreset } from "../presets.ts";
 import type { GatewayPresetId } from "../presets.ts";
 import type { ApiKeyMode, CommandContext, ModelProbeInfo, ModelsConfig, ProviderApi, ProviderStyle } from "../types.ts";
@@ -15,7 +15,7 @@ import {
 	promptProviderStyle,
 } from "../ui/prompts.ts";
 import { buildProbeUrl, dedupe, hasExplicitScheme } from "../url.ts";
-import { collectProbedModelInfo, fetchGatewayWideInfo, findProvidersByEndpoint, persistProvider } from "./shared.ts";
+import { collectProbedModelInfo, fetchGatewayWideInfo, findProvidersByEndpoint, persistProvider, probePickerItems } from "./shared.ts";
 
 async function confirmEndpointReuse(ctx: CommandContext, normalizedEndpoint: string): Promise<boolean> {
 	let config: ModelsConfig;
@@ -53,8 +53,8 @@ async function collectModelIds(
 
 	try {
 		ctx.ui.notify(`Probing ${buildProbeUrl(normalizedEndpoint)} ...`, "info");
-		const probed = await probeOpenAIModels(normalizedEndpoint, apiKey.mode, apiKey.value);
-		if (probed.items.length === 0) {
+		const probed = await probeModels(normalizedEndpoint, resolveApiKeyForProbe(apiKey.mode, apiKey.value));
+		if (probed.ids.length === 0) {
 			ctx.ui.notify("Probe succeeded but returned no models. Switching to manual entry.", "warning");
 			const ids = await promptModelIdsOneByOne(ctx, style);
 			return ids ? { ids } : null;
@@ -71,13 +71,10 @@ async function collectModelIds(
 				for (const [id, info] of gatewayWide) {
 					probed.infoById.set(id, { ...(probed.infoById.get(id) ?? {}), ...info });
 				}
-				for (const item of probed.items) {
-					item.description = describeProbeInfo(applyKnownModelFallback(item.value, probed.infoById.get(item.value)));
-				}
 			}
 		}
 
-		const picked = await pickMany(ctx, "Select models", probed.items);
+		const picked = await pickMany(ctx, "Select models", probePickerItems(probed.ids, probed.infoById));
 		if (!picked || picked.length === 0) return null;
 
 		const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, presetId, gatewayWide);

@@ -19,25 +19,10 @@ export type ModelOptions = {
 	thinkingLevelMap?: Record<string, string | null>;
 };
 
-// Best-effort model metadata detected while probing /models.
-export type ModelProbeInfo = {
-	contextWindow?: number;
-	vision?: boolean;
-	reasoning?: boolean;
-	alwaysThinking?: boolean; // reasoning exists but cannot be turned off
-	effortOptions?: string[]; // provider reasoning-effort names (none/minimal/low/.../max)
-	endpointTypes?: string[]; // New API / One API: supported_endpoint_types (chat, embeddings, ...)
-	inferred?: boolean; // filled from the built-in model table, not the gateway
-	inferredFields?: Array<"contextWindow" | "vision" | "reasoning">; // which fields were inferred
-};
-
-export type ProbeResult = {
-	items: ProbeItem[];
-	infoById: Map<string, ModelProbeInfo>;
-	// The base variant that actually answered /models (may differ from the
-	// configured baseUrl by a /v1 suffix on quirky gateways).
-	baseUrl: string;
-};
+// Model metadata types come from the model-probe package (probing logic was
+// extracted there); re-exported here so the rest of the extension has one
+// place to import from.
+export type { ModelProbeInfo, ProbeResult } from "model-probe";
 
 export type ModelsConfig = {
 	providers?: Record<string, any>;
@@ -58,6 +43,3 @@ export type SelectItem = {
 };
 
 export type CommandContext = Parameters<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>[1];
-
-export const PROBE_CONCURRENCY = 4;
-export const PROBE_TIMEOUT_MS = 4000;

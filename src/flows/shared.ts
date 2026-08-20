@@ -1,14 +1,14 @@
-import { loadModelsConfig, MODELS_JSON_PATH, saveModelsConfig } from "../config.ts";
-import { applyKnownModelFallback } from "../known-models.ts";
-import { buildModelEntry, modelIdOf, modelOptionsFromProbe, readModelOptions } from "../model-entry.ts";
 import {
-	enrichLiteLLMModelGroupInfo,
-	enrichLiteLLMModelInfo,
-	enrichOllamaModelDetails,
-	enrichOpenAIModelDetails,
-	enrichPublicModelInfo,
+	applyKnownModelFallback,
+	describeProbeInfo,
+	fetchGatewayWideInfo as probeGatewayWideInfo,
+	fetchPerModelInfo,
+	finalizeModelInfo,
 	probeInfoSummary,
-} from "../probe.ts";
+} from "model-probe";
+import { resolveApiKeyForProbe } from "../api-key.ts";
+import { loadModelsConfig, MODELS_JSON_PATH, saveModelsConfig } from "../config.ts";
+import { buildModelEntry, modelIdOf, modelOptionsFromProbe, readModelOptions } from "../model-entry.ts";
 import { gatewayPreset } from "../presets.ts";
 import type { GatewayPresetId, GatewayProbeProfile } from "../presets.ts";
 import type {
@@ -17,6 +17,7 @@ import type {
 	ModelOptions,
 	ModelProbeInfo,
 	ModelsConfig,
+	ProbeItem,
 	ProviderApi,
 	ProviderStyle,
 	SelectItem,
@@ -212,44 +213,26 @@ export async function addModelEntriesToProvider(
 // call (LiteLLM /model/info, /model_group/info, the site public catalog).
 // Cheap enough to run before the model picker so it can show real values.
 // Ollama has no gateway-wide source — its native probing is per-model.
+// Thin wrapper over model-probe that resolves the api key first.
 export async function fetchGatewayWideInfo(
 	style: ProviderStyle,
 	apiKey: { mode: ApiKeyMode; value?: string },
 	baseUrl: string,
 	profile: GatewayProbeProfile,
 ): Promise<Map<string, ModelProbeInfo>> {
-	const out = new Map<string, ModelProbeInfo>();
-	if (style === "ollama") return out;
+	if (style === "ollama") return new Map();
+	return probeGatewayWideInfo(baseUrl, { apiKey: resolveApiKeyForProbe(apiKey.mode, apiKey.value), profile });
+}
 
-	if (profile.modelInfo) {
-		for (const [id, info] of await enrichLiteLLMModelInfo(baseUrl, apiKey.mode, apiKey.value)) {
-			out.set(id, info);
-		}
-	}
-	// USTC-style site catalog /api/models/public (no auth) — authoritative
-	// context_window, so its values override what LiteLLM endpoints report.
-	if (profile.publicCatalog) {
-		for (const [id, info] of await enrichPublicModelInfo(baseUrl)) {
-			out.set(id, { ...(out.get(id) ?? {}), ...info });
-		}
-	}
-	// LiteLLM /model_group/info (server root, requires api key) — fills gaps the
-	// standard probes missed (e.g. when /model/info needs admin auth).
-	if (profile.modelGroupInfo) {
-		for (const [id, info] of await enrichLiteLLMModelGroupInfo(baseUrl, apiKey.mode, apiKey.value, [])) {
-			const existing = out.get(id);
-			if (!existing) {
-				out.set(id, info);
-				continue;
-			}
-			const filled = { ...existing };
-			if (filled.contextWindow === undefined && info.contextWindow !== undefined) filled.contextWindow = info.contextWindow;
-			if (filled.vision === undefined && info.vision !== undefined) filled.vision = info.vision;
-			if (filled.reasoning === undefined && info.reasoning !== undefined) filled.reasoning = info.reasoning;
-			out.set(id, filled);
-		}
-	}
-	return out;
+// Build picker items for probed model ids, with detected metadata merged with
+// the built-in rule presets for anything the gateway didn't say. Inferred
+// (preset) fields are tagged [local rules] individually.
+export function probePickerItems(ids: string[], infoById: Map<string, ModelProbeInfo>): ProbeItem[] {
+	return ids.map((id) => ({
+		value: id,
+		label: id,
+		description: describeProbeInfo(applyKnownModelFallback(id, infoById.get(id))),
+	}));
 }
 
 export async function collectProbedModelInfo(
@@ -264,30 +247,19 @@ export async function collectProbedModelInfo(
 ): Promise<Map<string, ModelProbeInfo>> {
 	ctx.ui.notify("Fetching model metadata (context, vision, reasoning) ...", "info");
 	const profile = gatewayPreset(presetId).profile;
+	const resolvedKey = resolveApiKeyForProbe(apiKey.mode, apiKey.value);
 
-	const merged = new Map(listInfo);
 	const gw = gatewayWide ?? (await fetchGatewayWideInfo(style, apiKey, baseUrl, profile));
-	for (const [id, info] of gw) {
-		merged.set(id, { ...(merged.get(id) ?? {}), ...info });
-	}
 
 	// Per-model details for the picked ids. Skipped when a gateway-wide source
 	// already answered for everything (LiteLLM's /models/{id} has no metadata).
 	let details = new Map<string, ModelProbeInfo>();
 	if (style === "ollama") {
-		details = await enrichOllamaModelDetails(baseUrl, apiKey.mode, apiKey.value, ids);
+		details = await fetchPerModelInfo(baseUrl, ids, { apiKey: resolvedKey, ollama: true });
 	} else if (profile.perModelDetails && gw.size === 0) {
-		details = await enrichOpenAIModelDetails(baseUrl, apiKey.mode, apiKey.value, ids);
+		details = await fetchPerModelInfo(baseUrl, ids, { apiKey: resolvedKey });
 	}
-	for (const [id, info] of details) {
-		merged.set(id, { ...(merged.get(id) ?? {}), ...info });
-	}
-	// Fallback: when a gateway exposes no metadata (stock One API / New API,
-	// bare proxies), classify well-known models with the local rules instead of
-	// leaving contextWindow/vision/reasoning unset.
-	for (const id of ids) {
-		const filled = applyKnownModelFallback(id, merged.get(id));
-		if (filled) merged.set(id, filled);
-	}
-	return merged;
+
+	// Merge (later maps win) and fill gaps from the built-in known-model rules.
+	return finalizeModelInfo(ids, listInfo, gw, details);
 }

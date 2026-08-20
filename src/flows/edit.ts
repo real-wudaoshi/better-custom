@@ -1,8 +1,7 @@
-import { apiKeyFromProvider } from "../api-key.ts";
+import { probeModels } from "model-probe";
+import { apiKeyFromProvider, resolveApiKeyForProbe } from "../api-key.ts";
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, saveModelsConfig } from "../config.ts";
-import { applyKnownModelFallback } from "../known-models.ts";
 import { applyReasoning, buildModelEntry, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
-import { describeProbeInfo, probeOpenAIModels } from "../probe.ts";
 import { gatewayPreset } from "../presets.ts";
 import type { CommandContext, ModelProbeInfo, ModelsConfig, ProbeResult, ProviderApi, ProviderStyle } from "../types.ts";
 import { pickMany, selectOne } from "../ui/select.ts";
@@ -22,6 +21,7 @@ import {
 	fetchGatewayWideInfo,
 	mutateModel,
 	mutateProvider,
+	probePickerItems,
 	providerModelItems,
 } from "./shared.ts";
 
@@ -419,15 +419,15 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	let probed: ProbeResult;
 	try {
 		ctx.ui.notify(`Probing ${buildProbeUrl(baseUrl)} ...`, "info");
-		probed = await probeOpenAIModels(baseUrl, apiKey.mode, apiKey.value);
+		probed = await probeModels(baseUrl, resolveApiKeyForProbe(apiKey.mode, apiKey.value));
 	} catch (error) {
 		ctx.ui.notify(`Probe failed: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return;
 	}
 
 	const existing = new Set((Array.isArray(provider.models) ? provider.models : []).map(modelIdOf));
-	const novel = probed.items.filter((item) => !existing.has(item.value));
-	if (novel.length === 0) {
+	const novelIds = probed.ids.filter((id) => !existing.has(id));
+	if (novelIds.length === 0) {
 		ctx.ui.notify("No new models — everything the endpoint returned is already configured.", "info");
 		return;
 	}
@@ -447,13 +447,10 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 			for (const [id, info] of gatewayWide) {
 				probed.infoById.set(id, { ...(probed.infoById.get(id) ?? {}), ...info });
 			}
-			for (const item of novel) {
-				item.description = describeProbeInfo(applyKnownModelFallback(item.value, probed.infoById.get(item.value)));
-			}
 		}
 	}
 
-	const picked = await pickMany(ctx, `New models for ${providerId}`, novel);
+	const picked = await pickMany(ctx, `New models for ${providerId}`, probePickerItems(novelIds, probed.infoById));
 	if (!picked || picked.length === 0) return;
 
 	const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, "auto", gatewayWide);

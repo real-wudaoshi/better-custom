@@ -1,5 +1,5 @@
 import { serializeApiKey } from "./api-key.ts";
-import { applyKnownModelFallback } from "./known-models.ts";
+import { applyKnownModelFallback } from "model-probe";
 import { PI_THINKING_LEVELS, REASONING_LEVELS } from "./types.ts";
 import type {
 	ApiKeyMode,

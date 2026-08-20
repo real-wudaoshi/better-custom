@@ -221,7 +221,9 @@ capabilities)都会回落到向导默认值 —— text+image 输入、reasoning
 
 ## 开发
 
-扩展是纯 TypeScript,由 pi 直接加载,无需构建步骤。
+扩展是纯 TypeScript,由 pi 直接加载,无需构建步骤。模型探测(`/models`
++ 元数据补全 + 知名模型规则)在独立的
+[model-probe](https://github.com/real-wudaoshi/model-probe) 包里。
 
 ```bash
 npm run check   # 用 node --check 对每个源文件做语法检查
@@ -234,9 +236,7 @@ npm run check   # 用 node --check 对每个源文件做语法检查
 - `src/config.ts` —— models 配置发现 + JSON/YAML 读写
 - `src/url.ts` —— 端点归一化及其他小工具
 - `src/api-key.ts` —— API key 解析/序列化助手
-- `src/probe.ts` —— `/models` 探测与元数据补全
 - `src/presets.ts` —— 网关预设(LiteLLM、One API、New API 等)
-- `src/known-models.ts` —— 知名模型 id 的内置回落规则
 - `src/model-entry.ts` —— 模型条目与 provider 配置的构建/读取/修改
 - `src/ui/select.ts` —— 可搜索的单选/多选选择器
 - `src/ui/prompts.ts` —— 向导输入提示
