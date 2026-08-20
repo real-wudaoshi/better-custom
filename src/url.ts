@@ -46,6 +46,9 @@ export function normalizeEndpoint(input: string, api: ProviderApi): string {
 		pathname = stripSuffix(pathname, "/responses");
 		pathname = stripSuffix(pathname, "/completions");
 		pathname = stripSuffix(pathname, "/models");
+	} else if (api === "google-generative-ai") {
+		// Gemini native: the base includes the version path (…/v1beta).
+		pathname = stripSuffix(pathname, "/models");
 	} else {
 		pathname = stripSuffix(pathname, "/messages");
 	}

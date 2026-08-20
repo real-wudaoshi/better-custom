@@ -14,6 +14,8 @@ LLM provider——无需手工编辑 `models.json` / `models.yml`。
   - OpenAI 兼容端点 —— Chat Completions(`openai-completions`)
   - OpenAI Responses API(`openai-responses`)—— 较新的 `/responses` 端点
   - Anthropic 兼容端点
+  - Gemini 端点(`google-generative-ai`)—— 原生 Gemini 格式,baseUrl
+    需带版本路径(如 `https://generativelanguage.googleapis.com/v1beta`)
   - Ollama 兼容端点
 - 自动使用当前宿主的 agent 目录
   - Pi:`models.json`
@@ -22,18 +24,20 @@ LLM provider——无需手工编辑 `models.json` / `models.yml`。
   - API key(原样写入当前 models 配置)
   - none(写入占位符,provider 仍可正常加载)
   - 重新探测时仍会解析已有的 `$ENV` 和 `!command` key
-- 对 OpenAI 兼容端点自动探测 `/models`
-- 添加 provider 时可选网关预设 —— LiteLLM、One API、New API、OpenRouter
+- 对 OpenAI 兼容和 Gemini 端点自动探测 `/models`
+- 探测步骤内可选网关预设 —— LiteLLM、One API、New API、OpenRouter
   或通用 OpenAI 兼容(vLLM、LM Studio 等)—— 向导只探测该网关实际暴露的
   元数据来源(Auto-detect 会全部尝试)。预设对任何 API 格式都适用 ——
   New API 这类网关在同一端点后同时提供 completions、responses、anthropic
-  格式 —— 且 LiteLLM / One API / New API 可以直接填裸域名(自动补 `/v1`)
+  格式 —— 且 LiteLLM / One API / New API 可以直接填裸域名(自动补 `/v1`)。
+  探测失败时可以换个网关类型重试,或改用手动输入
 - 探测时自动检测模型元数据:
   - 上下文窗口、最大输出 token、vision、reasoning 支持/档位
   - 来源: OpenAI `GET /models/{id}`(含 `capabilities.reasoning.effort_options`)、
     `/models` 列表内联元数据(OpenRouter 等)、LiteLLM 代理
     `GET /model/info`(一次请求覆盖所有模型)、One API / New API 的
-    `meta` 字段 + `supported_endpoint_types`,以及 Ollama 原生的
+    `meta` 字段 + `supported_endpoint_types`、Gemini 原生的
+    `/v1beta/models`(`inputTokenLimit`),以及 Ollama 原生的
     `/api/tags` + `/api/show`
   - 检测到的值会写入模型条目;什么都没检测到时回落到向导默认值
 - 探测结果使用多选模型选择器,内联展示检测到的元数据
@@ -87,16 +91,19 @@ pi install /path/to/better-custom
 
 依次引导你完成:
 
-- provider 类型(OpenAI Chat Completions / OpenAI Responses / Anthropic / Ollama)
-- 网关类型(除 Ollama 外的所有类型):Auto-detect、LiteLLM、One API、
-  New API、OpenRouter 或通用 —— 决定探测哪些元数据来源
-- 端点地址(One API / New API 可直接填裸域名,自动补 `/v1`)。探测本身是
-  路径自适应的:如果填的 base 上 `/models` 没有响应,会自动尝试加上或去掉
-  `/v1` 的另一个变体(有些网关 —— 比如 USTC 的 LiteLLM —— `/v1/models`
-  会挂起,而根路径的 `/models` 正常)
+- provider 类型(OpenAI Chat Completions / OpenAI Responses / Anthropic /
+  Gemini / Ollama)
+- 端点地址(裸域名也可以 —— 探测会自动适配 ±`/v1`)
 - provider 名称(必须唯一)
 - API key 方式(API key 或 none)
 - 模型发现(自动探测 `/models`)或手动输入模型
+  - 自动探测会先询问网关类型(除 Ollama 和 Gemini 外的所有类型):
+    Auto-detect、LiteLLM、One API、New API、OpenRouter 或通用 ——
+    决定探测哪些元数据来源、裸域名是否补 `/v1`。探测本身是路径自适应的:
+    如果填的 base 上 `/models` 没有响应,会自动尝试加上或去掉 `/v1` 的
+    另一个变体(有些网关 —— 比如 USTC 的 LiteLLM —— `/v1/models` 会挂起,
+    而根路径的 `/models` 正常);非本地的 `http://` 地址还会回退到
+    `https://`。失败后可以换个网关类型重试,或改用手动输入
 
 新添加的模型默认为 `input: ["text", "image"]`,并开启 `reasoning: true`、
 上限为 `xhigh`。当探测到真实元数据时 —— 上下文窗口、最大输出 token、
@@ -109,7 +116,7 @@ vision、provider 的 reasoning 档位(如 OpenAI 的 `effort_options`)——
 
 - 重新探测新模型 —— 再次查询 `/models`,添加尚未配置的模型
 - 设置上下文窗口(全部模型)—— 对所有模型应用同一个 `contextWindow`
-- API flavor —— 在 Chat Completions、Responses API、Anthropic Messages 之间切换
+- API flavor —— 在 Chat Completions、Responses API、Anthropic Messages、Gemini 之间切换
 - 逐模型编辑 —— 选一个模型,编辑单个字段:
   - Reasoning 上限(`off` → `max`)
   - Vision(text+image 或纯文本)

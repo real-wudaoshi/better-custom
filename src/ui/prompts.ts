@@ -1,9 +1,9 @@
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig } from "../config.ts";
-import { GATEWAY_PRESETS, gatewayPreset } from "../presets.ts";
+import { GATEWAY_PRESETS } from "../presets.ts";
 import type { GatewayPresetId } from "../presets.ts";
 import { REASONING_LEVELS } from "../types.ts";
 import type { ApiKeyMode, CommandContext, ProviderApi, ProviderStyle, ReasoningCeiling, SelectItem } from "../types.ts";
-import { ensureV1Path, normalizeEndpoint, slugify, suggestProviderId } from "../url.ts";
+import { normalizeEndpoint, slugify, suggestProviderId } from "../url.ts";
 import { selectOne } from "./select.ts";
 
 export async function promptApiKey(
@@ -110,13 +110,17 @@ export async function promptModelIdsOneByOne(
 			? "e.g. claude-sonnet-4-5 (blank to finish)"
 			: style === "ollama"
 				? "e.g. llama3.1:8b or qwen2.5-coder:7b (blank to finish)"
-				: "e.g. gpt-4o-mini or qwen/qwen3-coder (blank to finish)";
+				: style === "gemini"
+					? "e.g. gemini-2.5-pro (blank to finish)"
+					: "e.g. gpt-4o-mini or qwen/qwen3-coder (blank to finish)";
 	const nextPlaceholder =
 		style === "anthropic"
 			? "another Anthropic-style model id (blank to finish)"
 			: style === "ollama"
 				? "another Ollama model id (blank to finish)"
-				: "another OpenAI-style model id (blank to finish)";
+				: style === "gemini"
+					? "another Gemini model id (blank to finish)"
+					: "another OpenAI-style model id (blank to finish)";
 
 	while (true) {
 		const value = await ctx.ui.input(modelIds.length === 0 ? "Model id" : "Add another model id", modelIds.length === 0 ? firstPlaceholder : nextPlaceholder);
@@ -159,6 +163,7 @@ export async function promptProviderStyle(
 		{ value: "openai", label: "OpenAI-compatible (Chat Completions)", description: 'api: "openai-completions" — most OpenAI-compatible servers' },
 		{ value: "openai-responses", label: "OpenAI Responses API", description: 'api: "openai-responses" — the newer /responses endpoint' },
 		{ value: "anthropic", label: "Anthropic-compatible", description: 'api: "anthropic-messages"' },
+		{ value: "gemini", label: "Gemini (Google generative AI)", description: 'api: "google-generative-ai" — native Gemini format, baseUrl includes /v1beta' },
 		{ value: "ollama", label: "Ollama-compatible", description: 'api: "openai-completions" with Ollama-specific compat defaults' },
 	]);
 	if (!choice) return null;
@@ -169,7 +174,9 @@ export async function promptProviderStyle(
 			? "anthropic-messages"
 			: style === "openai-responses"
 				? "openai-responses"
-				: "openai-completions";
+				: style === "gemini"
+					? "google-generative-ai"
+					: "openai-completions";
 	return { style, api };
 }
 
@@ -177,19 +184,18 @@ export async function promptEndpoint(
 	ctx: CommandContext,
 	style: ProviderStyle,
 	api: ProviderApi,
-	presetId?: GatewayPresetId,
 ): Promise<{ normalized: string; raw: string } | null> {
-	// Gateways that mount the API under /v1 accept a bare host — say so.
-	const v1Hint = presetId && gatewayPreset(presetId).ensureV1 ? " (/v1 is added if missing)" : "";
 	const endpointInput = await ctx.ui.input(
 		"Endpoint",
 		style === "anthropic"
-			? `e.g. https://api.anthropic-proxy.com/v1${v1Hint}`
+			? "e.g. https://api.anthropic-proxy.com/v1"
 			: style === "ollama"
 				? "e.g. http://localhost:11434/v1"
-				: style === "openai-responses"
-					? `e.g. https://api.openai.com/v1${v1Hint}`
-					: `e.g. https://api.example.com/v1 or http://localhost:11434/v1${v1Hint}`,
+				: style === "gemini"
+					? "e.g. https://generativelanguage.googleapis.com/v1beta"
+					: style === "openai-responses"
+						? "e.g. https://api.openai.com/v1"
+						: "e.g. https://api.example.com/v1 or http://localhost:11434/v1",
 	);
 	if (endpointInput === undefined) return null;
 	const raw = endpointInput.trim();
@@ -199,9 +205,7 @@ export async function promptEndpoint(
 	}
 
 	try {
-		const normalized = normalizeEndpoint(raw, api);
-		// LiteLLM / One API / New API mount the API under /v1 — accept a bare host.
-		return { normalized: presetId && gatewayPreset(presetId).ensureV1 ? ensureV1Path(normalized) : normalized, raw };
+		return { normalized: normalizeEndpoint(raw, api), raw };
 	} catch (error) {
 		ctx.ui.notify(`Invalid endpoint: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return null;

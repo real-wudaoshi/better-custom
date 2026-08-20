@@ -15,6 +15,8 @@ required.
   - OpenAI-compatible endpoints — Chat Completions (`openai-completions`)
   - OpenAI Responses API (`openai-responses`) — the newer `/responses` endpoint
   - Anthropic-compatible endpoints
+  - Gemini endpoints (`google-generative-ai`) — native Gemini format; the
+    baseUrl includes the version path (e.g. `https://generativelanguage.googleapis.com/v1beta`)
   - Ollama-compatible endpoints
 - Uses the running host's agent directory automatically
   - Pi: `models.json`
@@ -23,23 +25,26 @@ required.
   - API key (stored verbatim in the active models config)
   - none (writes a placeholder so the provider still loads)
   - existing `$ENV` and `!command` keys are still resolved when re-probing
-- Auto-probe `/models` for OpenAI-compatible endpoints
-- Gateway presets when adding a provider — LiteLLM, One API, New API,
+- Auto-probe `/models` for OpenAI-compatible and Gemini endpoints
+- Gateway presets inside the probe step — LiteLLM, One API, New API,
   OpenRouter, or generic OpenAI-compatible (vLLM, LM Studio, ...) — so the
   wizard only probes the metadata sources that gateway actually exposes
   (Auto-detect tries everything). Presets apply to any API flavor — gateways
   like New API serve completions, responses, and anthropic formats behind one
   endpoint — and One API / New API accept a bare host (`/v1` is added
-  automatically). The probe itself is path-adaptive: if `/models` doesn't
-  answer on the given base, the variant with `/v1` added or removed is tried
-  automatically (some gateways, e.g. USTC's LiteLLM, hang on `/v1/models`
-  while serving `/models` at the root)
+  automatically). If a probe fails you can retry with a different gateway
+  type or switch to manual entry. The probe itself is path-adaptive: if
+  `/models` doesn't answer on the given base, the variant with `/v1` added or
+  removed is tried automatically (some gateways, e.g. USTC's LiteLLM, hang on
+  `/v1/models` while serving `/models` at the root), and non-local `http://`
+  URLs fall back to `https://`
 - Auto-detects model metadata while probing:
   - context window, max output tokens, vision, and reasoning support/levels
   - sources: OpenAI `GET /models/{id}` (incl. `capabilities.reasoning.effort_options`),
     inline `/models` list metadata (OpenRouter etc.), LiteLLM proxy
     `GET /model/info` (one call covers every model), One API / New API
-    `meta` fields + `supported_endpoint_types`, and Ollama's native
+    `meta` fields + `supported_endpoint_types`, Gemini's native
+    `/v1beta/models` (`inputTokenLimit`), and Ollama's native
     `/api/tags` + `/api/show`
   - detected values are written into the model entries; when nothing is
     detected the wizard falls back to its defaults
@@ -94,14 +99,17 @@ The wizard offers three actions:
 
 Guides you through:
 
-- provider style (OpenAI Chat Completions / OpenAI Responses / Anthropic / Ollama)
-- gateway type (all styles except Ollama): Auto-detect, LiteLLM, One API,
-  New API, OpenRouter, or generic — controls which metadata sources are probed
-- endpoint (for LiteLLM / One API / New API a bare host works — `/v1` is added
-  automatically)
+- provider style (OpenAI Chat Completions / OpenAI Responses / Anthropic /
+  Gemini / Ollama)
+- endpoint (bare hosts work — the probe adapts ±`/v1` automatically)
 - provider name (must be unique)
 - API key method (API key or none)
 - model discovery (auto-probe `/models`) or manual model entry
+  - auto-probe asks for the gateway type first (all styles except Ollama and
+    Gemini): Auto-detect, LiteLLM, One API, New API, OpenRouter, or generic —
+    controls which metadata sources are probed and whether a bare host gets
+    `/v1`. On failure you can retry with a different gateway type or switch
+    to manual entry.
 
 Newly added models default to `input: ["text", "image"]` and `reasoning: true`
 at the `xhigh` ceiling. When the probe detects real metadata — context window,
@@ -116,7 +124,7 @@ Pick a provider, then choose:
 - Re-probe for new models — query `/models` again and add ones not yet configured
 - Set context window (all models) — apply one `contextWindow` to every model
 - API flavor — switch the provider between Chat Completions, the Responses API,
-  and Anthropic Messages
+  Anthropic Messages, and Gemini
 - Edit per model — pick a model and edit a single field:
   - Reasoning ceiling (`off` → `max`)
   - Vision (text+image vs text-only)

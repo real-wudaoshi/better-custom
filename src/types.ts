@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-export type ProviderApi = "openai-completions" | "openai-responses" | "anthropic-messages";
-export type ProviderStyle = "openai" | "openai-responses" | "anthropic" | "ollama";
+export type ProviderApi = "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai";
+export type ProviderStyle = "openai" | "openai-responses" | "anthropic" | "ollama" | "gemini";
 export type ApiKeyMode = "env" | "literal" | "shell" | "none";
 // pi's reasoning ceilings. "off" means no reasoning; the rest are the levels a
 // model is allowed to use. See pi-ai getSupportedThinkingLevels.

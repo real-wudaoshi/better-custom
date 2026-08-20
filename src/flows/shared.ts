@@ -220,7 +220,8 @@ export async function fetchGatewayWideInfo(
 	baseUrl: string,
 	profile: GatewayProbeProfile,
 ): Promise<Map<string, ModelProbeInfo>> {
-	if (style === "ollama") return new Map();
+	// Ollama and Gemini have no LiteLLM-style gateway-wide metadata endpoints.
+	if (style === "ollama" || style === "gemini") return new Map();
 	return probeGatewayWideInfo(baseUrl, { apiKey: resolveApiKeyForProbe(apiKey.mode, apiKey.value), profile });
 }
 

@@ -14,7 +14,7 @@ import {
 	promptProviderId,
 	promptProviderStyle,
 } from "../ui/prompts.ts";
-import { buildProbeUrl, dedupe, hasExplicitScheme } from "../url.ts";
+import { buildProbeUrl, dedupe, ensureV1Path, hasExplicitScheme } from "../url.ts";
 import { collectProbedModelInfo, fetchGatewayWideInfo, findProvidersByEndpoint, persistProvider, probePickerItems } from "./shared.ts";
 
 async function confirmEndpointReuse(ctx: CommandContext, normalizedEndpoint: string): Promise<boolean> {
@@ -42,8 +42,7 @@ async function collectModelIds(
 	apiKey: { mode: ApiKeyMode; value?: string },
 	normalizedEndpoint: string,
 	trimmedEndpointInput: string,
-	presetId: GatewayPresetId,
-): Promise<{ ids: string[]; infoById?: Map<string, ModelProbeInfo> } | null> {
+): Promise<{ ids: string[]; infoById?: Map<string, ModelProbeInfo>; baseUrl?: string } | null> {
 	const modelMode = await selectOne(ctx, "Models", ["Auto probe from /models", "Add manually"]);
 	if (!modelMode) return null;
 	if (modelMode !== "Auto probe from /models") {
@@ -51,42 +50,74 @@ async function collectModelIds(
 		return ids ? { ids } : null;
 	}
 
-	try {
-		ctx.ui.notify(`Probing ${buildProbeUrl(normalizedEndpoint)} ...`, "info");
-		const probed = await probeModels(normalizedEndpoint, resolveApiKeyForProbe(apiKey.mode, apiKey.value));
-		if (probed.ids.length === 0) {
-			ctx.ui.notify("Probe succeeded but returned no models. Switching to manual entry.", "warning");
-			const ids = await promptModelIdsOneByOne(ctx, style);
-			return ids ? { ids } : null;
+	// Auto probe: pick the gateway type as part of probing — it tunes which
+	// metadata sources are tried and whether a bare host gets /v1. Gateways
+	// like LiteLLM / One API / New API expose several API flavors behind one
+	// endpoint, so the preset applies to every style except Ollama and Gemini,
+	// which have their own native probing.
+	let baseUrl = normalizedEndpoint;
+	while (true) {
+		let presetId: GatewayPresetId = "auto";
+		if (style !== "ollama" && style !== "gemini") {
+			const preset = await promptGatewayPreset(ctx);
+			if (!preset) return null;
+			presetId = preset;
 		}
+		const preset = gatewayPreset(presetId);
+		const probeBase = preset.ensureV1 ? ensureV1Path(baseUrl) : baseUrl;
 
-		// Gateway-wide metadata (one call per source) — fetch BEFORE the picker so
-		// it shows real detected values instead of local-rule guesses.
-		const profile = gatewayPreset(presetId).profile;
-		let gatewayWide: Map<string, ModelProbeInfo> | undefined;
-		if (profile.modelInfo || profile.publicCatalog || profile.modelGroupInfo) {
-			ctx.ui.notify("Fetching model metadata (context, vision, reasoning) ...", "info");
-			gatewayWide = await fetchGatewayWideInfo(style, apiKey, probed.baseUrl, profile);
-			if (gatewayWide.size > 0) {
-				for (const [id, info] of gatewayWide) {
-					probed.infoById.set(id, { ...(probed.infoById.get(id) ?? {}), ...info });
+		try {
+			ctx.ui.notify(`Probing ${buildProbeUrl(probeBase)} ...`, "info");
+			const probed = await probeModels(probeBase, resolveApiKeyForProbe(apiKey.mode, apiKey.value));
+			// The variant that actually answered (±/v1 adapted) becomes the
+			// provider's baseUrl.
+			baseUrl = probed.baseUrl;
+			if (probed.ids.length === 0) {
+				ctx.ui.notify("Probe succeeded but returned no models. Switching to manual entry.", "warning");
+				const ids = await promptModelIdsOneByOne(ctx, style);
+				return ids ? { ids, baseUrl } : null;
+			}
+
+			// Gateway-wide metadata (one call per source) — fetch BEFORE the picker so
+			// it shows real detected values instead of local-rule guesses.
+			const profile = preset.profile;
+			let gatewayWide: Map<string, ModelProbeInfo> | undefined;
+			if (profile.modelInfo || profile.publicCatalog || profile.modelGroupInfo) {
+				ctx.ui.notify("Fetching model metadata (context, vision, reasoning) ...", "info");
+				gatewayWide = await fetchGatewayWideInfo(style, apiKey, probed.baseUrl, profile);
+				if (gatewayWide.size > 0) {
+					for (const [id, info] of gatewayWide) {
+						probed.infoById.set(id, { ...(probed.infoById.get(id) ?? {}), ...info });
+					}
 				}
 			}
+
+			const picked = await pickMany(ctx, "Select models", probePickerItems(probed.ids, probed.infoById));
+			if (!picked || picked.length === 0) return null;
+
+			const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, presetId, gatewayWide);
+			return { ids: picked, infoById, baseUrl };
+		} catch (error) {
+			const schemeHint = hasExplicitScheme(trimmedEndpointInput) ? "" : " No http:// or https:// was provided.";
+			ctx.ui.notify(`Auto probe failed: ${error instanceof Error ? error.message : String(error)}.${schemeHint}`, "warning");
+			const action = await selectOne(ctx, "Probe failed — what next?", [
+				{
+					value: "retry",
+					label: "Retry",
+					description: style === "ollama" || style === "gemini" ? "Probe again" : "Pick the gateway type again and probe again",
+				},
+				{ value: "manual", label: "Add models manually", description: "Enter model ids by hand" },
+				{ value: "cancel", label: "Cancel", description: "Abort adding this provider" },
+			]);
+			if (action === "retry") continue;
+			if (action === "manual") {
+				const ids = await promptModelIdsOneByOne(ctx, style);
+				// The chosen preset still tells us the URL shape (e.g. New API needs /v1).
+				const manualBase = preset.ensureV1 ? ensureV1Path(baseUrl) : baseUrl;
+				return ids ? { ids, baseUrl: manualBase } : null;
+			}
+			return null;
 		}
-
-		const picked = await pickMany(ctx, "Select models", probePickerItems(probed.ids, probed.infoById));
-		if (!picked || picked.length === 0) return null;
-
-		const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, presetId, gatewayWide);
-		return { ids: picked, infoById };
-	} catch (error) {
-		const schemeHint = hasExplicitScheme(trimmedEndpointInput) ? "" : "\n\nNo http:// or https:// was provided.";
-		ctx.ui.notify(
-			`Auto probe failed: ${error instanceof Error ? error.message : String(error)}.${schemeHint}\n\nSwitching to manual entry.`,
-			"warning",
-		);
-		const ids = await promptModelIdsOneByOne(ctx, style);
-		return ids ? { ids } : null;
 	}
 }
 
@@ -95,17 +126,7 @@ export async function addProviderFlow(ctx: CommandContext) {
 	if (!styleChoice) return;
 	const { style, api } = styleChoice;
 
-	// Gateways like LiteLLM / One API / New API expose several API flavors
-	// (completions, responses, anthropic) behind one endpoint, so the preset
-	// applies to every style except Ollama, which has its own native probing.
-	let presetId: GatewayPresetId = "auto";
-	if (style !== "ollama") {
-		const preset = await promptGatewayPreset(ctx);
-		if (!preset) return;
-		presetId = preset;
-	}
-
-	const endpoint = await promptEndpoint(ctx, style, api, presetId);
+	const endpoint = await promptEndpoint(ctx, style, api);
 	if (!endpoint) return;
 	if (!(await confirmEndpointReuse(ctx, endpoint.normalized))) return;
 
@@ -123,13 +144,15 @@ export async function addProviderFlow(ctx: CommandContext) {
 		);
 	}
 
-	const collected = await collectModelIds(ctx, style, api, apiKey, endpoint.normalized, endpoint.raw, presetId);
+	const collected = await collectModelIds(ctx, style, api, apiKey, endpoint.normalized, endpoint.raw);
 	if (!collected || collected.ids.length === 0) return;
 
 	const providerConfig = buildProviderConfig(
 		style,
 		api,
-		endpoint.normalized,
+		// After a successful probe this is the base variant that actually
+		// answered; otherwise the endpoint as entered (±/v1 from the preset).
+		collected.baseUrl ?? endpoint.normalized,
 		apiKey,
 		dedupe(collected.ids),
 		// New providers default to text+image, reasoning on (xhigh ceiling). Tune

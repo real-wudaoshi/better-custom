@@ -87,7 +87,7 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 			{ value: "context", label: "Set context window (all models)", description: `Apply one contextWindow to all ${modelCount} model${modelCount === 1 ? "" : "s"}` },
 			{ value: "models", label: "Edit per model", description: `${modelCount} model${modelCount === 1 ? "" : "s"} — reasoning, vision, context, max tokens, headers, delete` },
 			{ value: "add", label: "Add models manually", description: "Type model ids to add" },
-			{ value: "api", label: "API flavor", suffix: ` • ${typeof provider.api === "string" ? provider.api : "unset"}`, description: "Switch between Chat Completions, Responses, and Anthropic Messages" },
+			{ value: "api", label: "API flavor", suffix: ` • ${typeof provider.api === "string" ? provider.api : "unset"}`, description: "Switch between Chat Completions, Responses, Anthropic Messages, and Gemini" },
 			{ value: "rename", label: "Rename provider", description: "Change the provider name in the models config" },
 			{ value: "back", label: "Back", description: "Return to the provider list" },
 		]);
@@ -115,6 +115,7 @@ const API_OPTIONS: Array<{ value: ProviderApi; label: string; description: strin
 	{ value: "openai-completions", label: "OpenAI Chat Completions", description: 'api: "openai-completions" — most OpenAI-compatible servers' },
 	{ value: "openai-responses", label: "OpenAI Responses API", description: 'api: "openai-responses" — the newer /responses endpoint' },
 	{ value: "anthropic-messages", label: "Anthropic Messages", description: 'api: "anthropic-messages" — requires an Anthropic-style endpoint' },
+	{ value: "google-generative-ai", label: "Gemini (Google generative AI)", description: 'api: "google-generative-ai" — native Gemini format; baseUrl must include the version path (/v1beta)' },
 ];
 
 // Switch a provider's api flavor in the models config, keeping everything else.
@@ -405,7 +406,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 		return;
 	}
 	const api = typeof provider?.api === "string" ? (provider.api as ProviderApi) : "openai-completions";
-	if (api !== "openai-completions" && api !== "openai-responses" && api !== "anthropic-messages") {
+	if (api !== "openai-completions" && api !== "openai-responses" && api !== "anthropic-messages" && api !== "google-generative-ai") {
 		ctx.ui.notify("This provider's API doesn't expose /models. Use 'Add models manually'.", "warning");
 		return;
 	}
@@ -433,7 +434,13 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	}
 
 	const style: ProviderStyle =
-		provider?.api === "anthropic-messages" ? "anthropic" : provider?.compat ? "ollama" : "openai";
+		provider?.api === "anthropic-messages"
+			? "anthropic"
+			: provider?.api === "google-generative-ai"
+				? "gemini"
+				: provider?.compat
+					? "ollama"
+					: "openai";
 
 	// Gateway-wide metadata (one call per source) — fetch BEFORE the picker so
 	// it shows real detected values instead of local-rule guesses. Re-probe
@@ -466,7 +473,13 @@ async function addModelsToProvider(ctx: CommandContext, providerId: string) {
 		return;
 	}
 	const style: ProviderStyle =
-		provider?.api === "anthropic-messages" ? "anthropic" : provider?.compat ? "ollama" : "openai";
+		provider?.api === "anthropic-messages"
+			? "anthropic"
+			: provider?.api === "google-generative-ai"
+				? "gemini"
+				: provider?.compat
+					? "ollama"
+					: "openai";
 	const ids = await promptModelIdsOneByOne(ctx, style);
 	if (!ids || ids.length === 0) return;
 	await addModelEntriesToProvider(ctx, providerId, ids);
