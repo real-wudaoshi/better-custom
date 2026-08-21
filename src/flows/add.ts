@@ -169,8 +169,9 @@ export async function addProviderFlow(ctx: CommandContext) {
 		collected.baseUrl ?? endpoint.normalized,
 		apiKey,
 		dedupe(collected.ids),
-		// New providers default to text+image, reasoning on (xhigh ceiling). Tune
-		// per model later via Edit provider → Edit a model.
+		// The reasoning ceiling for thinking models defaults to xhigh; vision /
+		// context / reasoning come from the probe (local rules, then model-probe
+		// defaults). Tune per model later via Edit provider → Edit a model.
 		{ reasoning: "xhigh", vision: true },
 		undefined,
 		collected.infoById,
@@ -186,11 +187,11 @@ export async function addProviderFlow(ctx: CommandContext) {
 			}).length
 		: 0;
 	const inferredCount = infoById ? collected.ids.filter((id) => infoById.get(id)?.inferred).length : 0;
-	const unsetCount = collected.ids.length - probedCount - inferredCount;
+	const defaultedCount = collected.ids.length - probedCount - inferredCount;
 	const summary: string[] = [];
 	if (probedCount > 0) summary.push(`detected ${probedCount}`);
 	if (inferredCount > 0) summary.push(`inferred from known models ${inferredCount}`);
-	if (unsetCount > 0) summary.push(`unset ${unsetCount}`);
+	if (defaultedCount > 0) summary.push(`defaults ${defaultedCount}`);
 	ctx.ui.notify(
 		`Saved provider "${providerId}" to ${MODELS_JSON_PATH}` + (summary.length > 0 ? ` — context/vision/reasoning: ${summary.join(", ")}` : ""),
 		"info",

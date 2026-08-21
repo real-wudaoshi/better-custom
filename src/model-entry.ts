@@ -1,5 +1,5 @@
 import { serializeApiKey } from "./api-key.ts";
-import { applyKnownModelFallback } from "model-probe";
+import { resolveModelInfo } from "model-probe";
 import { PI_THINKING_LEVELS, REASONING_LEVELS } from "./types.ts";
 import type {
 	ApiKeyMode,
@@ -46,8 +46,9 @@ function ceilingFromThinkingMap(map: Record<string, string | null>): ReasoningCe
 	return "off";
 }
 
-// Turn probe metadata into model knobs. Fields the probe couldn't determine fall
-// back to the wizard's defaults (reasoning on at the xhigh ceiling, text+image).
+// Turn probe metadata into model knobs. model-probe has already resolved each
+// field (detected > local rules > its own defaults: vision off, reasoning on);
+// the wizard fallback only supplies the reasoning ceiling for thinking models.
 export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback: ModelOptions): ModelOptions {
 	if (!info) return fallback;
 	const opts: ModelOptions = {
@@ -108,8 +109,8 @@ export function buildModelEntry(
 ): any {
 	const entry: any = {
 		id,
-		// Default to text+image so pi forwards images upstream. Without this,
-		// custom models default to text-only and images are silently dropped.
+		// vision comes from the probe (default: off). Text-only models have
+		// images silently dropped by pi, so this must match reality.
 		input: opts.vision ? ["text", "image"] : ["text"],
 	};
 
@@ -145,9 +146,10 @@ export function buildProviderConfig(
 		api,
 		...(serializedApiKey ? { apiKey: serializedApiKey } : {}),
 		models: modelIds.map((id) => {
-			// Detected metadata wins; the built-in rules fill any gaps — including
-			// for manually added models, which have no probe info at all.
-			const info = applyKnownModelFallback(id, infoById?.get(id));
+			// resolveModelInfo layers detected metadata over the local rules and
+			// the built-in defaults (vision off, reasoning on) — including for
+			// manually added models, which have no probe info at all.
+			const info = resolveModelInfo(id, infoById?.get(id));
 			return buildModelEntry(id, modelOptionsFromProbe(info, opts), ceilingOverrides);
 		}),
 	};

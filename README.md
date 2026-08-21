@@ -46,9 +46,13 @@ required.
     `meta` fields + `supported_endpoint_types`, Gemini's native
     `/v1beta/models` (`inputTokenLimit`), and Ollama's native
     `/api/tags` + `/api/show`
-  - detected values are written into the model entries; when nothing is
-    detected the wizard falls back to its defaults
-- Multi-select model picker for probed models, showing detected metadata inline
+  - every field is resolved in three tiers — detected from the gateway, then
+    the built-in known-model rules (tagged `[local rules]`), then the defaults
+    (`vision: false`, `reasoning: true`); detected values are written into the
+    model entries
+- Multi-select model picker for probed models, showing metadata inline — only
+  values that differ from the defaults are shown (e.g. a model probed as
+  text-only gets no tag)
 - Unique provider names — the wizard refuses to overwrite an existing provider
 - Developer-role support is probed automatically on add (one tiny chat
   completion): endpoints that reject the OpenAI `developer` role (e.g. Kimi's
@@ -56,8 +60,8 @@ required.
   keeps sending `system` instead of failing with a 400. When the probe is
   inconclusive it defaults to off, which every endpoint accepts. Tune later
   via Edit provider → Developer role
-- Image input enabled by default (`input: ["text", "image"]`) so vision-capable
-  models receive images instead of having them silently dropped
+- Image input follows the probe (default off): vision-capable models get
+  `input: ["text", "image"]`, everything else stays text-only
 - Reasoning enabled by default at the `xhigh` ceiling for newly added models
 - Safe delete flow for whole providers or individual models
 
@@ -117,10 +121,9 @@ Guides you through:
     `/v1`. On failure you can retry with a different gateway type or switch
     to manual entry.
 
-Newly added models default to `input: ["text", "image"]` and `reasoning: true`
-at the `xhigh` ceiling. When the probe detects real metadata — context window,
-max output tokens, vision, and the provider's reasoning levels (e.g. OpenAI's
-`effort_options`) — the detected values are written instead. Tune any of this
+Newly added models resolve every field in three tiers: values detected from
+the gateway win, then the built-in known-model rules, then the defaults —
+text-only input and `reasoning: true` at the `xhigh` ceiling. Tune any of this
 later via Edit provider.
 
 ### Edit a provider
@@ -221,8 +224,9 @@ maximum cause an API error. If you want to cap a model's output, set it per
 model via Edit provider → Edit a model → Max output tokens.
 
 Everything is best-effort: unknown fields (404s, bare vLLM/LM Studio responses,
-missing capabilities) fall back to the wizard defaults — text+image input,
-reasoning on at the `xhigh` ceiling, no `contextWindow`/`maxTokens` set.
+missing capabilities) fall back to the known-model rules, then the defaults —
+text-only input, reasoning on at the `xhigh` ceiling, no
+`contextWindow`/`maxTokens` set.
 
 When the probe finds the provider's reasoning levels (e.g. OpenAI
 `effort_options: ["none", "low", "medium", "high"]`), the wizard writes a

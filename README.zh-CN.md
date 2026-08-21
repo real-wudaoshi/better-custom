@@ -39,16 +39,18 @@ LLM provider——无需手工编辑 `models.json` / `models.yml`。
     `meta` 字段 + `supported_endpoint_types`、Gemini 原生的
     `/v1beta/models`(`inputTokenLimit`),以及 Ollama 原生的
     `/api/tags` + `/api/show`
-  - 检测到的值会写入模型条目;什么都没检测到时回落到向导默认值
-- 探测结果使用多选模型选择器,内联展示检测到的元数据
+  - 每个字段按三层解析:网关实测 > 内置已知模型规则(标记 `[local rules]`)
+    > 默认值(`vision: false`、`reasoning: true`),最终值写入模型条目
+- 探测结果使用多选模型选择器,内联展示元数据 —— 只显示与默认值不同的项
+  (比如实测不支持 vision 的模型不会显示任何标记)
 - provider 名称唯一 —— 向导拒绝覆盖已有 provider
 - 添加时会自动探测 developer role 支持(一次极小的 chat completion):
   拒绝 OpenAI `developer` 角色的端点(比如 Kimi 订阅端点)会写入
   `compat.supportsDeveloperRole: false`,pi 就会继续发 `system` 而不是
   报 400。探测结果不确定时默认关闭 —— 所有端点都接受 `system`。之后可通过
   "编辑 provider → Developer role" 调整
-- 默认启用图像输入(`input: ["text", "image"]`),支持 vision 的模型
-  能收到图片,而不是被静默丢弃
+- 图像输入跟随探测结果(默认关闭):支持 vision 的模型写入
+  `input: ["text", "image"]`,其余保持纯文本
 - 新添加的模型默认开启 reasoning,上限为 `xhigh`
 - 安全的删除流程,支持删除整个 provider 或单个模型
 
@@ -110,10 +112,9 @@ pi install /path/to/better-custom
     而根路径的 `/models` 正常);非本地的 `http://` 地址还会回退到
     `https://`。失败后可以换个网关类型重试,或改用手动输入
 
-新添加的模型默认为 `input: ["text", "image"]`,并开启 `reasoning: true`、
-上限为 `xhigh`。当探测到真实元数据时 —— 上下文窗口、最大输出 token、
-vision、provider 的 reasoning 档位(如 OpenAI 的 `effort_options`)——
-会改为写入检测值。之后都可以通过"编辑 provider"调整。
+新添加的模型按三层解析每个字段:网关实测优先,其次是内置已知模型规则,
+最后是默认值 —— 纯文本输入、`reasoning: true`(`xhigh` 上限)。之后都可以
+通过"编辑 provider"调整。
 
 ### 编辑 provider
 
@@ -206,8 +207,8 @@ LiteLLM 代理会被自动识别:向导先调用 `GET /model/info`(一次请求�
 的输出,请通过 编辑 provider → 逐模型编辑 → 最大输出 token 单独设置。
 
 一切都是尽力而为:未知字段(404、裸 vLLM/LM Studio 响应、缺失的
-capabilities)都会回落到向导默认值 —— text+image 输入、reasoning 开启
-(`xhigh` 上限)、不设置 `contextWindow`/`maxTokens`。
+capabilities)先回落到已知模型规则,再回落到默认值 —— 纯文本输入、
+reasoning 开启(`xhigh` 上限)、不设置 `contextWindow`/`maxTokens`。
 
 当探测到 provider 的 reasoning 档位时(例如 OpenAI 的
 `effort_options: ["none", "low", "medium", "high"]`),向导会写入完全匹配

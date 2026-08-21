@@ -1,10 +1,10 @@
 import {
-	applyKnownModelFallback,
 	describeProbeInfo,
 	fetchGatewayWideInfo as probeGatewayWideInfo,
 	fetchPerModelInfo,
 	finalizeModelInfo,
 	probeInfoSummary,
+	resolveModelInfo,
 } from "model-probe";
 import { resolveApiKeyForProbe } from "../api-key.ts";
 import { loadModelsConfig, MODELS_JSON_PATH, saveModelsConfig } from "../config.ts";
@@ -206,20 +206,17 @@ export async function addModelEntriesToProvider(
 		return;
 	}
 
-	// Added models default to reasoning on (xhigh ceiling) + text+image. When the
-	// probe detected metadata (context window, vision, reasoning levels) it is
-	// applied instead. Tune per model later via Edit provider → Edit a model.
+	// Added models default to reasoning on (xhigh ceiling); vision and context
+	// come from the probe, then the local rules, then model-probe's defaults
+	// (vision off, reasoning on). Tune per model later via Edit provider →
+	// Edit a model.
 	const defaultOpts: ModelOptions = { reasoning: "xhigh", vision: true };
 	let detectedCount = 0;
 	const saved = await mutateProvider(ctx, providerId, (p) => {
 		const models = Array.isArray(p.models) ? p.models : [];
 		for (const id of fresh) {
-			const info = infoById?.get(id);
-			// Manual entries (and gateways that expose no metadata) still get
-			// context/vision/reasoning/max-tokens for well-known models from the
-			// built-in rules.
-			const mergedInfo = applyKnownModelFallback(id, info);
-			if (mergedInfo && probeInfoSummary(mergedInfo).length > 0) detectedCount++;
+			const mergedInfo = resolveModelInfo(id, infoById?.get(id));
+			if (probeInfoSummary(mergedInfo).length > 0) detectedCount++;
 			models.push(buildModelEntry(id, modelOptionsFromProbe(mergedInfo, defaultOpts)));
 		}
 		p.models = models;
@@ -248,14 +245,14 @@ export async function fetchGatewayWideInfo(
 	return probeGatewayWideInfo(baseUrl, { apiKey: resolveApiKeyForProbe(apiKey.mode, apiKey.value), profile });
 }
 
-// Build picker items for probed model ids, with detected metadata merged with
-// the built-in rule presets for anything the gateway didn't say. Inferred
-// (preset) fields are tagged [local rules] individually.
+// Build picker items for probed model ids, resolved through the local rules
+// and defaults. describeProbeInfo only renders values that differ from the
+// defaults, and fields filled from the rules are tagged [local rules].
 export function probePickerItems(ids: string[], infoById: Map<string, ModelProbeInfo>): ProbeItem[] {
 	return ids.map((id) => ({
 		value: id,
 		label: id,
-		description: describeProbeInfo(applyKnownModelFallback(id, infoById.get(id))),
+		description: describeProbeInfo(resolveModelInfo(id, infoById.get(id))),
 	}));
 }
 
