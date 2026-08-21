@@ -2,6 +2,7 @@ import { probeDeveloperRole, probeInfoSummary, probeModels } from "model-probe";
 import { resolveApiKeyForProbe } from "../api-key.ts";
 import { loadModelsConfig, MODELS_JSON_PATH } from "../config.ts";
 import { buildProviderConfig } from "../model-entry.ts";
+import { fetchModelsDevProviders, type ModelsDevProvider } from "../modelsdev.ts";
 import { gatewayPreset } from "../presets.ts";
 import type { GatewayPresetId } from "../presets.ts";
 import type { ApiKeyMode, CommandContext, ModelProbeInfo, ModelsConfig, ProviderApi, ProviderStyle } from "../types.ts";
@@ -14,8 +15,43 @@ import {
 	promptProviderId,
 	promptProviderStyle,
 } from "../ui/prompts.ts";
-import { buildProbeUrl, dedupe, ensureV1Path, hasExplicitScheme } from "../url.ts";
+import { buildProbeUrl, dedupe, ensureV1Path, hasExplicitScheme, normalizeEndpoint } from "../url.ts";
 import { collectProbedModelInfo, fetchGatewayWideInfo, findProvidersByEndpoint, persistProvider, probePickerItems } from "./shared.ts";
+
+// Pick a known API provider from the models.dev catalog; returns its endpoint.
+async function pickCatalogEndpoint(ctx: CommandContext, api: ProviderApi): Promise<{ normalized: string; raw: string } | null> {
+	ctx.ui.notify("Fetching the models.dev provider catalog ...", "info");
+	let providers: Map<string, ModelsDevProvider>;
+	try {
+		providers = await fetchModelsDevProviders();
+	} catch (error) {
+		ctx.ui.notify(`Could not fetch the models.dev catalog: ${error instanceof Error ? error.message : String(error)}`, "error");
+		return null;
+	}
+
+	const items = [...providers.values()]
+		.sort((a, b) => a.name.localeCompare(b.name))
+		.map((p) => ({
+			value: p.id,
+			label: p.name,
+			suffix: ` • ${p.baseUrl}`,
+			description: p.env.length > 0 ? `env: ${p.env.join(" / ")}` : undefined,
+			searchText: `${p.id} ${p.name} ${p.baseUrl}`,
+		}));
+	const choice = await selectOne(ctx, "models.dev providers", items);
+	if (!choice) return null;
+	const provider = providers.get(choice);
+	if (!provider) return null;
+	if (provider.env.length > 0) {
+		ctx.ui.notify(`${provider.name} expects the ${provider.env.join(" / ")} env var.`, "info");
+	}
+	try {
+		return { normalized: normalizeEndpoint(provider.baseUrl, api), raw: provider.baseUrl };
+	} catch (error) {
+		ctx.ui.notify(`Invalid catalog endpoint "${provider.baseUrl}": ${error instanceof Error ? error.message : String(error)}`, "error");
+		return null;
+	}
+}
 
 async function confirmEndpointReuse(ctx: CommandContext, normalizedEndpoint: string): Promise<boolean> {
 	let config: ModelsConfig;
@@ -126,7 +162,19 @@ export async function addProviderFlow(ctx: CommandContext) {
 	if (!styleChoice) return;
 	const { style, api } = styleChoice;
 
-	const endpoint = await promptEndpoint(ctx, style, api);
+	// OpenAI-style endpoints can be picked straight from the models.dev catalog
+	// (known providers + their base URLs) instead of typing the URL by hand.
+	let endpoint: { normalized: string; raw: string } | null;
+	if (style === "openai" || style === "openai-responses") {
+		const source = await selectOne(ctx, "Endpoint source", [
+			{ value: "catalog", label: "Pick from models.dev catalog", description: "Known API providers with their base URLs (OpenRouter, DeepSeek, ...)" },
+			{ value: "manual", label: "Enter manually", description: "Type the endpoint URL yourself" },
+		]);
+		if (!source) return;
+		endpoint = source === "catalog" ? await pickCatalogEndpoint(ctx, api) : await promptEndpoint(ctx, style, api);
+	} else {
+		endpoint = await promptEndpoint(ctx, style, api);
+	}
 	if (!endpoint) return;
 	if (!(await confirmEndpointReuse(ctx, endpoint.normalized))) return;
 

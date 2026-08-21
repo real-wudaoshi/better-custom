@@ -25,6 +25,9 @@ LLM provider——无需手工编辑 `models.json` / `models.yml`。
   - none(写入占位符,provider 仍可正常加载)
   - 重新探测时仍会解析已有的 `$ENV` 和 `!command` key
 - 对 OpenAI 兼容和 Gemini 端点自动探测 `/models`
+- 内置 [models.dev](https://models.dev) provider 目录 —— 直接挑选已知 API
+  站点(OpenRouter、DeepSeek、Groq、xAI 等),不用手敲 base URL;
+  models.dev 访问不了时自动回退到 GitHub/jsDelivr 镜像
 - 探测步骤内可选网关预设 —— LiteLLM、One API、New API、OpenRouter
   或通用 OpenAI 兼容(vLLM、LM Studio 等)—— 向导只探测该网关实际暴露的
   元数据来源(Auto-detect 会全部尝试)。预设对任何 API 格式都适用 ——
@@ -100,7 +103,10 @@ pi install /path/to/better-custom
 
 - provider 类型(OpenAI Chat Completions / OpenAI Responses / Anthropic /
   Gemini / Ollama)
-- 端点地址(裸域名也可以 —— 探测会自动适配 ±`/v1`)
+- 端点地址 —— 手动输入(裸域名也可以,探测自动适配 ±`/v1`),或从
+  [models.dev](https://models.dev) 目录里挑(仅限 OpenAI 风格的 provider):
+  里面是已知 API 站点的 base URL 和 env 变量名。models.dev 本身访问不了时
+  会自动回退到其数据仓库的 GitHub/jsDelivr 镜像
 - provider 名称(必须唯一)
 - API key 方式(API key 或 none)
 - 模型发现(自动探测 `/models`)或手动输入模型

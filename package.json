@@ -71,6 +71,6 @@
   },
   "scripts": {
     "build": "echo 'No build step required'",
-    "check": "node --check index.ts && node --check src/types.ts && node --check src/config.ts && node --check src/url.ts && node --check src/api-key.ts && node --check src/model-entry.ts && node --check src/ui/select.ts && node --check src/ui/prompts.ts && node --check src/flows/shared.ts && node --check src/flows/add.ts && node --check src/flows/edit.ts && node --check src/flows/delete.ts"
+    "check": "node --check index.ts && node --check src/types.ts && node --check src/config.ts && node --check src/url.ts && node --check src/api-key.ts && node --check src/model-entry.ts && node --check src/modelsdev.ts && node --check src/ui/select.ts && node --check src/ui/prompts.ts && node --check src/flows/shared.ts && node --check src/flows/add.ts && node --check src/flows/edit.ts && node --check src/flows/delete.ts"
   }
 }

@@ -26,6 +26,9 @@ required.
   - none (writes a placeholder so the provider still loads)
   - existing `$ENV` and `!command` keys are still resolved when re-probing
 - Auto-probe `/models` for OpenAI-compatible and Gemini endpoints
+- Provider catalog from [models.dev](https://models.dev) — pick a known API
+  site (OpenRouter, DeepSeek, Groq, xAI, ...) instead of typing its base URL;
+  falls back to a GitHub/jsDelivr mirror where models.dev is unreachable
 - Gateway presets inside the probe step — LiteLLM, One API, New API,
   OpenRouter, or generic OpenAI-compatible (vLLM, LM Studio, ...) — so the
   wizard only probes the metadata sources that gateway actually exposes
@@ -111,7 +114,10 @@ Guides you through:
 
 - provider style (OpenAI Chat Completions / OpenAI Responses / Anthropic /
   Gemini / Ollama)
-- endpoint (bare hosts work — the probe adapts ±`/v1` automatically)
+- endpoint — typed by hand, or picked from the [models.dev](https://models.dev)
+  catalog (OpenAI-style providers only): known API sites with their base URLs
+  and env var names. When models.dev itself is unreachable, the catalog falls
+  back to a GitHub/jsDelivr mirror of its data repo
 - provider name (must be unique)
 - API key method (API key or none)
 - model discovery (auto-probe `/models`) or manual model entry
