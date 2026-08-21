@@ -86,7 +86,7 @@ pi install /path/to/better-custom
 After installing, reload pi if needed, then run:
 
 ```text
-/better-custom
+/custom-provider
 ```
 
 The wizard offers three actions:
@@ -257,7 +257,7 @@ npm run check   # syntax-check every source file with node --check
 
 ### Project layout
 
-- `index.ts` — extension entry point (registers the `/better-custom` command)
+- `index.ts` — extension entry point (registers the `/custom-provider` command)
 - `src/types.ts` — shared types and constants
 - `src/config.ts` — models config discovery + JSON/YAML load/save
 - `src/url.ts` — endpoint normalization and other small helpers

@@ -78,7 +78,7 @@ pi install /path/to/better-custom
 安装后按需重载 pi,然后运行:
 
 ```text
-/better-custom
+/custom-provider
 ```
 
 向导提供三个操作:
@@ -240,7 +240,7 @@ npm run check   # 用 node --check 对每个源文件做语法检查
 
 ### 项目结构
 
-- `index.ts` —— 扩展入口(注册 `/better-custom` 命令)
+- `index.ts` —— 扩展入口(注册 `/custom-provider` 命令)
 - `src/types.ts` —— 共享类型与常量
 - `src/config.ts` —— models 配置发现 + JSON/YAML 读写
 - `src/url.ts` —— 端点归一化及其他小工具
