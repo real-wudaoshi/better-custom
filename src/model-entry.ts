@@ -137,6 +137,7 @@ export function buildProviderConfig(
 	opts: ModelOptions,
 	ceilingOverrides?: Partial<Record<"xhigh" | "max", string>>,
 	infoById?: Map<string, ModelProbeInfo>,
+	developerRole?: boolean,
 ) {
 	const serializedApiKey = serializeApiKey(apiKey.mode, apiKey.value, style);
 	const config: any = {
@@ -157,6 +158,12 @@ export function buildProviderConfig(
 			supportsDeveloperRole: false,
 			supportsReasoningEffort: false,
 		};
+	} else if (style === "openai" || style === "openai-responses") {
+		// pi-ai auto-detects developer-role support only for a handful of known
+		// providers (by id / baseUrl); everyone else gets the probed value.
+		// When the probe couldn't tell, default to false — sending "system"
+		// instead of "developer" is accepted everywhere, the reverse is not.
+		config.compat = { supportsDeveloperRole: developerRole ?? false };
 	}
 
 	return config;

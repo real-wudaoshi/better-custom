@@ -1,4 +1,4 @@
-import { probeInfoSummary, probeModels } from "model-probe";
+import { probeDeveloperRole, probeInfoSummary, probeModels } from "model-probe";
 import { resolveApiKeyForProbe } from "../api-key.ts";
 import { loadModelsConfig, MODELS_JSON_PATH } from "../config.ts";
 import { buildProviderConfig } from "../model-entry.ts";
@@ -147,6 +147,20 @@ export async function addProviderFlow(ctx: CommandContext) {
 	const collected = await collectModelIds(ctx, style, api, apiKey, endpoint.normalized, endpoint.raw);
 	if (!collected || collected.ids.length === 0) return;
 
+	// pi sends system messages with the "developer" role for reasoning models
+	// when the endpoint supports it; gateways that don't (e.g. Kimi's
+	// subscription endpoint) answer 400. Probe it once with a tiny completion.
+	let developerRole: boolean | undefined;
+	if (style === "openai" || style === "openai-responses") {
+		const probeBase = collected.baseUrl ?? endpoint.normalized;
+		developerRole = await probeDeveloperRole(probeBase, resolveApiKeyForProbe(apiKey.mode, apiKey.value), collected.ids[0]);
+		if (developerRole === false) {
+			ctx.ui.notify("This endpoint rejects the developer role — it will be disabled in the provider config.", "info");
+		} else if (developerRole === undefined) {
+			ctx.ui.notify("Could not probe developer-role support — defaulting to off (safe for every endpoint).", "info");
+		}
+	}
+
 	const providerConfig = buildProviderConfig(
 		style,
 		api,
@@ -160,6 +174,7 @@ export async function addProviderFlow(ctx: CommandContext) {
 		{ reasoning: "xhigh", vision: true },
 		undefined,
 		collected.infoById,
+		developerRole,
 	);
 	if (!(await persistProvider(ctx, providerId, providerConfig))) return;
 

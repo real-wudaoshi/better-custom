@@ -50,6 +50,12 @@ required.
     detected the wizard falls back to its defaults
 - Multi-select model picker for probed models, showing detected metadata inline
 - Unique provider names — the wizard refuses to overwrite an existing provider
+- Developer-role support is probed automatically on add (one tiny chat
+  completion): endpoints that reject the OpenAI `developer` role (e.g. Kimi's
+  subscription endpoint) get `compat.supportsDeveloperRole: false`, so pi
+  keeps sending `system` instead of failing with a 400. When the probe is
+  inconclusive it defaults to off, which every endpoint accepts. Tune later
+  via Edit provider → Developer role
 - Image input enabled by default (`input: ["text", "image"]`) so vision-capable
   models receive images instead of having them silently dropped
 - Reasoning enabled by default at the `xhigh` ceiling for newly added models
@@ -125,6 +131,9 @@ Pick a provider, then choose:
 - Set context window (all models) — apply one `contextWindow` to every model
 - API flavor — switch the provider between Chat Completions, the Responses API,
   Anthropic Messages, and Gemini
+- Developer role — whether the endpoint accepts the OpenAI `developer` role:
+  detect from the API (re-run the probe), force on/off, or fall back to pi's
+  own auto-detection
 - Edit per model — pick a model and edit a single field:
   - Reasoning ceiling (`off` → `max`)
   - Vision (text+image vs text-only)

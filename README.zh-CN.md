@@ -42,6 +42,11 @@ LLM provider——无需手工编辑 `models.json` / `models.yml`。
   - 检测到的值会写入模型条目;什么都没检测到时回落到向导默认值
 - 探测结果使用多选模型选择器,内联展示检测到的元数据
 - provider 名称唯一 —— 向导拒绝覆盖已有 provider
+- 添加时会自动探测 developer role 支持(一次极小的 chat completion):
+  拒绝 OpenAI `developer` 角色的端点(比如 Kimi 订阅端点)会写入
+  `compat.supportsDeveloperRole: false`,pi 就会继续发 `system` 而不是
+  报 400。探测结果不确定时默认关闭 —— 所有端点都接受 `system`。之后可通过
+  "编辑 provider → Developer role" 调整
 - 默认启用图像输入(`input: ["text", "image"]`),支持 vision 的模型
   能收到图片,而不是被静默丢弃
 - 新添加的模型默认开启 reasoning,上限为 `xhigh`
@@ -117,6 +122,8 @@ vision、provider 的 reasoning 档位(如 OpenAI 的 `effort_options`)——
 - 重新探测新模型 —— 再次查询 `/models`,添加尚未配置的模型
 - 设置上下文窗口(全部模型)—— 对所有模型应用同一个 `contextWindow`
 - API flavor —— 在 Chat Completions、Responses API、Anthropic Messages、Gemini 之间切换
+- Developer role —— 端点是否接受 OpenAI 的 `developer` 角色:可以从 API
+  重新探测、手动强制开/关,或回落到 pi 自己的自动检测
 - 逐模型编辑 —— 选一个模型,编辑单个字段:
   - Reasoning 上限(`off` → `max`)
   - Vision(text+image 或纯文本)
