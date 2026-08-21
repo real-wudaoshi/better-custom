@@ -1,8 +1,14 @@
-import { probeDeveloperRole, probeInfoSummary, probeModels } from "model-probe";
+import {
+	fetchModelsDevInfoForBaseUrl,
+	fetchModelsDevProviders,
+	probeDeveloperRole,
+	probeInfoSummary,
+	probeModels,
+	type ModelsDevProvider,
+} from "model-probe";
 import { resolveApiKeyForProbe } from "../api-key.ts";
 import { loadModelsConfig, MODELS_JSON_PATH } from "../config.ts";
 import { buildProviderConfig } from "../model-entry.ts";
-import { fetchModelsDevProviders, type ModelsDevProvider } from "../modelsdev.ts";
 import { gatewayPreset } from "../presets.ts";
 import type { GatewayPresetId } from "../presets.ts";
 import type { ApiKeyMode, CommandContext, ModelProbeInfo, ModelsConfig, ProviderApi, ProviderStyle } from "../types.ts";
@@ -128,10 +134,13 @@ async function collectModelIds(
 				}
 			}
 
-			const picked = await pickMany(ctx, "Select models", probePickerItems(probed.ids, probed.infoById));
+			// models.dev catalog tier — below the local rules, above defaults.
+			const modelsDev = profile.modelsDev ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl) : undefined;
+
+			const picked = await pickMany(ctx, "Select models", probePickerItems(probed.ids, probed.infoById, modelsDev));
 			if (!picked || picked.length === 0) return null;
 
-			const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, presetId, gatewayWide);
+			const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, presetId, gatewayWide, modelsDev);
 			return { ids: picked, infoById, baseUrl };
 		} catch (error) {
 			const schemeHint = hasExplicitScheme(trimmedEndpointInput) ? "" : " No http:// or https:// was provided.";

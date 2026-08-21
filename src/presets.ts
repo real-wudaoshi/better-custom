@@ -11,6 +11,7 @@ export type GatewayProbeProfile = {
 	modelGroupInfo: boolean; // LiteLLM GET /model_group/info (server root, needs an api key)
 	publicCatalog: boolean; // USTC-style GET {site}/api/models/public (no auth)
 	perModelDetails: boolean; // OpenAI GET /models/{id}
+	modelsDev: boolean; // models.dev catalog matched by base URL (below local rules, above defaults)
 };
 
 export type GatewayPreset = {
@@ -24,8 +25,8 @@ export type GatewayPreset = {
 	ensureV1: boolean;
 };
 
-const FULL: GatewayProbeProfile = { modelInfo: true, modelGroupInfo: true, publicCatalog: true, perModelDetails: true };
-const NONE: GatewayProbeProfile = { modelInfo: false, modelGroupInfo: false, publicCatalog: false, perModelDetails: false };
+const FULL: GatewayProbeProfile = { modelInfo: true, modelGroupInfo: true, publicCatalog: true, perModelDetails: true, modelsDev: true };
+const NONE: GatewayProbeProfile = { modelInfo: false, modelGroupInfo: false, publicCatalog: false, perModelDetails: false, modelsDev: false };
 
 export const GATEWAY_PRESETS: GatewayPreset[] = [
 	{
@@ -39,7 +40,7 @@ export const GATEWAY_PRESETS: GatewayPreset[] = [
 		id: "litellm",
 		label: "LiteLLM",
 		description: "LiteLLM proxy — one-shot /model/info (+ /model_group/info with a key); per-model endpoints carry no metadata",
-		profile: { modelInfo: true, modelGroupInfo: true, publicCatalog: true, perModelDetails: false },
+		profile: { ...FULL, perModelDetails: false, modelsDev: false },
 		ensureV1: false,
 	},
 	{
@@ -59,15 +60,15 @@ export const GATEWAY_PRESETS: GatewayPreset[] = [
 	{
 		id: "openrouter",
 		label: "OpenRouter",
-		description: "OpenRouter — rich inline /models metadata; per-model detail fetch as a supplement",
-		profile: { ...NONE, perModelDetails: true },
+		description: "OpenRouter — rich inline /models metadata; models.dev catalog as a supplement",
+		profile: { ...NONE, perModelDetails: true, modelsDev: true },
 		ensureV1: false,
 	},
 	{
 		id: "generic",
 		label: "Generic OpenAI-compatible",
-		description: "vLLM, LM Studio, LocalAI, Xinference, SGLang, ... — per-model GET /models/{id}",
-		profile: { ...NONE, perModelDetails: true },
+		description: "vLLM, LM Studio, LocalAI, Xinference, SGLang, ... — per-model GET /models/{id}, plus the models.dev catalog",
+		profile: { ...NONE, perModelDetails: true, modelsDev: true },
 		ensureV1: false,
 	},
 ];

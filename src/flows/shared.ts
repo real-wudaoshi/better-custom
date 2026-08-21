@@ -1,6 +1,7 @@
 import {
 	describeProbeInfo,
 	fetchGatewayWideInfo as probeGatewayWideInfo,
+	fetchModelsDevInfoForBaseUrl,
 	fetchPerModelInfo,
 	finalizeModelInfo,
 	probeInfoSummary,
@@ -245,14 +246,18 @@ export async function fetchGatewayWideInfo(
 	return probeGatewayWideInfo(baseUrl, { apiKey: resolveApiKeyForProbe(apiKey.mode, apiKey.value), profile });
 }
 
-// Build picker items for probed model ids, resolved through the local rules
-// and defaults. describeProbeInfo only renders values that differ from the
-// defaults, and fields filled from the rules are tagged [local rules].
-export function probePickerItems(ids: string[], infoById: Map<string, ModelProbeInfo>): ProbeItem[] {
+// Build picker items for probed model ids, resolved through the local rules,
+// the models.dev catalog, and defaults. describeProbeInfo only renders values
+// that differ from the defaults, tagged [local rules] / [models.dev] by source.
+export function probePickerItems(
+	ids: string[],
+	infoById: Map<string, ModelProbeInfo>,
+	modelsDev?: Map<string, ModelProbeInfo>,
+): ProbeItem[] {
 	return ids.map((id) => ({
 		value: id,
 		label: id,
-		description: describeProbeInfo(resolveModelInfo(id, infoById.get(id))),
+		description: describeProbeInfo(resolveModelInfo(id, infoById.get(id), modelsDev)),
 	}));
 }
 
@@ -265,12 +270,18 @@ export async function collectProbedModelInfo(
 	listInfo: Map<string, ModelProbeInfo>,
 	presetId: GatewayPresetId = "auto",
 	gatewayWide?: Map<string, ModelProbeInfo>,
+	modelsDev?: Map<string, ModelProbeInfo>,
 ): Promise<Map<string, ModelProbeInfo>> {
 	ctx.ui.notify("Fetching model metadata (context, vision, reasoning) ...", "info");
 	const profile = gatewayPreset(presetId).profile;
 	const resolvedKey = resolveApiKeyForProbe(apiKey.mode, apiKey.value);
 
 	const gw = gatewayWide ?? (await fetchGatewayWideInfo(style, apiKey, baseUrl, profile));
+
+	// models.dev catalog tier (below local rules, above defaults), matched by
+	// base URL. One cached call; empty when the endpoint isn't a known provider.
+	const dev =
+		modelsDev ?? (profile.modelsDev && style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(baseUrl) : undefined);
 
 	// Per-model details for the picked ids. Skipped when a gateway-wide source
 	// already answered for everything (LiteLLM's /models/{id} has no metadata).
@@ -281,6 +292,6 @@ export async function collectProbedModelInfo(
 		details = await fetchPerModelInfo(baseUrl, ids, { apiKey: resolvedKey });
 	}
 
-	// Merge (later maps win) and fill gaps from the built-in known-model rules.
-	return finalizeModelInfo(ids, listInfo, gw, details);
+	// Merge (later maps win) and resolve: local rules, then models.dev, then defaults.
+	return finalizeModelInfo(ids, [listInfo, gw, details], { modelsDev: dev });
 }

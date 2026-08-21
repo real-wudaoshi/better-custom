@@ -1,4 +1,4 @@
-import { probeDeveloperRole, probeModels } from "model-probe";
+import { fetchModelsDevInfoForBaseUrl, probeDeveloperRole, probeModels } from "model-probe";
 import { apiKeyFromProvider, resolveApiKeyForProbe } from "../api-key.ts";
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, saveModelsConfig } from "../config.ts";
 import { applyReasoning, buildModelEntry, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
@@ -545,10 +545,13 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 		}
 	}
 
-	const picked = await pickMany(ctx, `New models for ${providerId}`, probePickerItems(novelIds, probed.infoById));
+	// models.dev catalog tier — below the local rules, above defaults.
+	const modelsDev = style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl) : undefined;
+
+	const picked = await pickMany(ctx, `New models for ${providerId}`, probePickerItems(novelIds, probed.infoById, modelsDev));
 	if (!picked || picked.length === 0) return;
 
-	const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, "auto", gatewayWide);
+	const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, "auto", gatewayWide, modelsDev);
 	await addModelEntriesToProvider(ctx, providerId, picked, infoById);
 }
 
