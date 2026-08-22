@@ -49,10 +49,11 @@ required.
     `meta` fields + `supported_endpoint_types`, Gemini's native
     `/v1beta/models` (`inputTokenLimit`), and Ollama's native
     `/api/tags` + `/api/show`
-  - every field is resolved in three tiers — detected from the gateway, then
-    the built-in known-model rules (tagged `[local rules]`), then the defaults
-    (`vision: false`, `reasoning: true`); detected values are written into the
-    model entries
+  - every field is resolved in four tiers — detected from the gateway, then
+    the models.dev catalog (tagged `[models.dev]`, exact per-model entries),
+    then the built-in known-model rules (tagged `[local rules]`), then the
+    defaults (`vision: false`, `reasoning: true`); detected values are
+    written into the model entries
 - Multi-select model picker for probed models, showing metadata inline — only
   values that differ from the defaults are shown (e.g. a model probed as
   text-only gets no tag)

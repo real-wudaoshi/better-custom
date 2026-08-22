@@ -42,8 +42,8 @@ LLM provider——无需手工编辑 `models.json` / `models.yml`。
     `meta` 字段 + `supported_endpoint_types`、Gemini 原生的
     `/v1beta/models`(`inputTokenLimit`),以及 Ollama 原生的
     `/api/tags` + `/api/show`
-  - 每个字段按三层解析:网关实测 > 内置已知模型规则(标记 `[local rules]`)
-    > 默认值(`vision: false`、`reasoning: true`),最终值写入模型条目
+  - 每个字段按四层解析:网关实测 > models.dev 目录(标记 `[models.dev]`,精确到单个模型)
+    > 内置已知模型规则(标记 `[local rules]`)> 默认值(`vision: false`、`reasoning: true`),最终值写入模型条目
 - 探测结果使用多选模型选择器,内联展示元数据 —— 只显示与默认值不同的项
   (比如实测不支持 vision 的模型不会显示任何标记)
 - provider 名称唯一 —— 向导拒绝覆盖已有 provider

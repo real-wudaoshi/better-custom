@@ -47,8 +47,9 @@ function ceilingFromThinkingMap(map: Record<string, string | null>): ReasoningCe
 }
 
 // Turn probe metadata into model knobs. model-probe has already resolved each
-// field (detected > local rules > its own defaults: vision off, reasoning on);
-// the wizard fallback only supplies the reasoning ceiling for thinking models.
+// field (detected > models.dev > local rules > its own defaults: vision off,
+// reasoning on); the wizard fallback only supplies the reasoning ceiling for
+// thinking models.
 export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback: ModelOptions): ModelOptions {
 	if (!info) return fallback;
 	const opts: ModelOptions = {

@@ -134,7 +134,7 @@ async function collectModelIds(
 				}
 			}
 
-			// models.dev catalog tier — below the local rules, above defaults.
+			// models.dev catalog tier — above the local rules, below detected values.
 			const modelsDev = profile.modelsDev ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl) : undefined;
 
 			const picked = await pickMany(ctx, "Select models", probePickerItems(probed.ids, probed.infoById, modelsDev));
@@ -227,8 +227,9 @@ export async function addProviderFlow(ctx: CommandContext) {
 		apiKey,
 		dedupe(collected.ids),
 		// The reasoning ceiling for thinking models defaults to xhigh; vision /
-		// context / reasoning come from the probe (local rules, then model-probe
-		// defaults). Tune per model later via Edit provider → Edit a model.
+		// context / reasoning come from the probe (models.dev, local rules,
+		// then model-probe defaults). Tune per model later via Edit provider →
+		// Edit a model.
 		{ reasoning: "xhigh", vision: true },
 		undefined,
 		collected.infoById,

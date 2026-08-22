@@ -545,7 +545,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 		}
 	}
 
-	// models.dev catalog tier — below the local rules, above defaults.
+	// models.dev catalog tier — above the local rules, below detected values.
 	const modelsDev = style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl) : undefined;
 
 	const picked = await pickMany(ctx, `New models for ${providerId}`, probePickerItems(novelIds, probed.infoById, modelsDev));

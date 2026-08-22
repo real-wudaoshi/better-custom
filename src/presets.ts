@@ -11,7 +11,7 @@ export type GatewayProbeProfile = {
 	modelGroupInfo: boolean; // LiteLLM GET /model_group/info (server root, needs an api key)
 	publicCatalog: boolean; // USTC-style GET {site}/api/models/public (no auth)
 	perModelDetails: boolean; // OpenAI GET /models/{id}
-	modelsDev: boolean; // models.dev catalog matched by base URL (below local rules, above defaults)
+	modelsDev: boolean; // models.dev catalog matched by base URL (above local rules, below detected)
 };
 
 export type GatewayPreset = {

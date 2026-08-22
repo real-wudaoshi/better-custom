@@ -208,9 +208,9 @@ export async function addModelEntriesToProvider(
 	}
 
 	// Added models default to reasoning on (xhigh ceiling); vision and context
-	// come from the probe, then the local rules, then model-probe's defaults
-	// (vision off, reasoning on). Tune per model later via Edit provider →
-	// Edit a model.
+	// come from the probe, then models.dev, then the local rules, then
+	// model-probe's defaults (vision off, reasoning on). Tune per model later
+	// via Edit provider → Edit a model.
 	const defaultOpts: ModelOptions = { reasoning: "xhigh", vision: true };
 	let detectedCount = 0;
 	const saved = await mutateProvider(ctx, providerId, (p) => {
@@ -246,9 +246,9 @@ export async function fetchGatewayWideInfo(
 	return probeGatewayWideInfo(baseUrl, { apiKey: resolveApiKeyForProbe(apiKey.mode, apiKey.value), profile });
 }
 
-// Build picker items for probed model ids, resolved through the local rules,
-// the models.dev catalog, and defaults. describeProbeInfo only renders values
-// that differ from the defaults, tagged [local rules] / [models.dev] by source.
+// Build picker items for probed model ids, resolved through the models.dev
+// catalog, the local rules, and defaults. describeProbeInfo only renders values
+// that differ from the defaults, tagged [models.dev] / [local rules] by source.
 export function probePickerItems(
 	ids: string[],
 	infoById: Map<string, ModelProbeInfo>,
@@ -278,8 +278,9 @@ export async function collectProbedModelInfo(
 
 	const gw = gatewayWide ?? (await fetchGatewayWideInfo(style, apiKey, baseUrl, profile));
 
-	// models.dev catalog tier (below local rules, above defaults), matched by
-	// base URL. One cached call; empty when the endpoint isn't a known provider.
+	// models.dev catalog tier (exact per-model entries — above local rules,
+	// below detected values), matched by base URL. One cached call; empty when
+	// the endpoint isn't a known provider.
 	const dev =
 		modelsDev ?? (profile.modelsDev && style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(baseUrl) : undefined);
 
@@ -292,6 +293,6 @@ export async function collectProbedModelInfo(
 		details = await fetchPerModelInfo(baseUrl, ids, { apiKey: resolvedKey });
 	}
 
-	// Merge (later maps win) and resolve: local rules, then models.dev, then defaults.
+	// Merge (later maps win) and resolve: models.dev, then local rules, then defaults.
 	return finalizeModelInfo(ids, [listInfo, gw, details], { modelsDev: dev });
 }
