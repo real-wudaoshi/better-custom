@@ -51,8 +51,8 @@ export async function promptCeilingProviderString(ctx: CommandContext, level: "x
 	return trimmed || undefined;
 }
 
-export async function promptVision(ctx: CommandContext, current?: boolean): Promise<boolean | null> {
-	const choice = await selectOne(ctx, "Image input (vision)", [
+export async function promptImage(ctx: CommandContext, current?: boolean): Promise<boolean | null> {
+	const choice = await selectOne(ctx, "Image input", [
 		{ value: "yes", label: "Yes - send text + images", description: "Sets input: [text, image]" },
 		{ value: "no", label: "No - text only", description: "Sets input: [text]" },
 	], { initialIndex: current === false ? 1 : 0 });

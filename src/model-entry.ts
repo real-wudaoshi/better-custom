@@ -47,14 +47,15 @@ function ceilingFromThinkingMap(map: Record<string, string | null>): ReasoningCe
 }
 
 // Turn probe metadata into model knobs. model-probe has already resolved each
-// field (detected > models.dev > local rules > its own defaults: vision off,
+// field (detected > models.dev > local rules > its own defaults: image off,
 // reasoning on); the wizard fallback only supplies the reasoning ceiling for
-// thinking models.
+// thinking models. (model-probe also tracks video input, but pi's model config
+// only supports text/image, so it isn't carried into ModelOptions.)
 export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback: ModelOptions): ModelOptions {
 	if (!info) return fallback;
 	const opts: ModelOptions = {
 		reasoning: fallback.reasoning,
-		vision: info.vision ?? fallback.vision,
+		image: info.image ?? fallback.image,
 		contextWindow: info.contextWindow ?? fallback.contextWindow,
 	};
 
@@ -110,9 +111,10 @@ export function buildModelEntry(
 ): any {
 	const entry: any = {
 		id,
-		// vision comes from the probe (default: off). Text-only models have
-		// images silently dropped by pi, so this must match reality.
-		input: opts.vision ? ["text", "image"] : ["text"],
+		// image comes from the probe (default: off). Text-only models have
+		// images silently dropped by pi, so this must match reality. pi's
+		// input union has no "video", so video never lands here.
+		input: opts.image ? ["text", "image"] : ["text"],
 	};
 
 	if (typeof opts.contextWindow === "number" && opts.contextWindow > 0) {
@@ -148,7 +150,7 @@ export function buildProviderConfig(
 		...(serializedApiKey ? { apiKey: serializedApiKey } : {}),
 		models: modelIds.map((id) => {
 			// resolveModelInfo layers detected metadata over the local rules and
-			// the built-in defaults (vision off, reasoning on) — including for
+			// the built-in defaults (image off, reasoning on) — including for
 			// manually added models, which have no probe info at all.
 			const info = resolveModelInfo(id, infoById?.get(id));
 			return buildModelEntry(id, modelOptionsFromProbe(info, opts), ceilingOverrides);
@@ -172,12 +174,12 @@ export function buildProviderConfig(
 	return config;
 }
 
-// Read the reasoning ceiling + vision flags already stored on a model entry,
+// Read the reasoning ceiling + image flag already stored on a model entry,
 // mirroring pi's getSupportedThinkingLevels so edit defaults match reality.
 export function readModelOptions(model: any): ModelOptions {
-	const vision = Array.isArray(model?.input) ? model.input.includes("image") : true;
+	const image = Array.isArray(model?.input) ? model.input.includes("image") : true;
 	const contextWindow = typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
-	if (!model || model.reasoning !== true) return { reasoning: "off", vision, contextWindow };
+	if (!model || model.reasoning !== true) return { reasoning: "off", image, contextWindow };
 
 	const map = model.thinkingLevelMap;
 	let ceiling: ReasoningCeiling = "high";
@@ -196,7 +198,7 @@ export function readModelOptions(model: any): ModelOptions {
 			}
 		}
 	}
-	return { reasoning: ceiling, vision, contextWindow };
+	return { reasoning: ceiling, image, contextWindow };
 }
 
 export function readCeilingString(model: any, level: "xhigh" | "max"): string | undefined {

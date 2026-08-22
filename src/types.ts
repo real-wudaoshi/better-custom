@@ -12,7 +12,7 @@ export const PI_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "x
 // Per-model knobs the wizard can write. apiKey lives at provider scope, not here.
 export type ModelOptions = {
 	reasoning: ReasoningCeiling;
-	vision: boolean;
+	image: boolean;
 	contextWindow?: number;
 	// When set, written verbatim instead of deriving a map from the ceiling. Used
 	// when a probe learned the provider's exact thinking levels (effort options).

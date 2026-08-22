@@ -11,7 +11,7 @@ import {
 	promptMaxTokens,
 	promptModelIdsOneByOne,
 	promptReasoning,
-	promptVision,
+	promptImage,
 } from "../ui/prompts.ts";
 import { buildProbeUrl, slugify } from "../url.ts";
 import {
@@ -87,7 +87,7 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 		const action = await selectOne(ctx, `Edit ${providerId}`, [
 			{ value: "probe", label: "Re-probe for new models", description: "Query /models again and add ones not already configured" },
 			{ value: "context", label: "Set context window (all models)", description: `Apply one contextWindow to all ${modelCount} model${modelCount === 1 ? "" : "s"}` },
-			{ value: "models", label: "Edit per model", description: `${modelCount} model${modelCount === 1 ? "" : "s"} — reasoning, vision, context, max tokens, headers, delete` },
+			{ value: "models", label: "Edit per model", description: `${modelCount} model${modelCount === 1 ? "" : "s"} — reasoning, image input, context, max tokens, headers, delete` },
 			{ value: "add", label: "Add models manually", description: "Type model ids to add" },
 			{ value: "api", label: "API flavor", suffix: ` • ${typeof provider.api === "string" ? provider.api : "unset"}`, description: "Switch between Chat Completions, Responses, Anthropic Messages, and Gemini" },
 			{
@@ -290,7 +290,7 @@ async function renameProvider(ctx: CommandContext, providerId: string): Promise<
 }
 
 // Apply a single contextWindow value to every model in the provider, preserving
-// each model's reasoning/vision config. A value of 0 clears it from all models.
+// each model's reasoning/image config. A value of 0 clears it from all models.
 async function setProviderContextWindow(ctx: CommandContext, providerId: string) {
 	let provider: any;
 	try {
@@ -395,7 +395,7 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 
 		const field = await selectOne(ctx, `Edit ${modelId}`, [
 			{ value: "reasoning", label: "Reasoning", suffix: ` • ${opts.reasoning}`, description: "Set the reasoning ceiling (off → xhigh)" },
-			{ value: "vision", label: "Vision", suffix: ` • ${opts.vision ? "on" : "off"}`, description: "Toggle image input (text+image vs text-only)" },
+			{ value: "image", label: "Image input", suffix: ` • ${opts.image ? "on" : "off"}`, description: "Toggle image input (text+image vs text-only)" },
 			{ value: "context", label: "Context window", suffix: ` • ${ctxWin}`, description: "Max context tokens for this model" },
 			{ value: "maxtokens", label: "Max output tokens", suffix: ` • ${maxTok}`, description: "Max tokens this model may generate" },
 			{ value: "override", label: "Headers / endpoint override", suffix: ` • ${hasHeaders ? "headers" : override}`, description: "Per-model HTTP headers and api/baseUrl override" },
@@ -416,10 +416,10 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 				}
 			}
 			await mutateModel(ctx, providerId, modelId, (m) => applyReasoning(m, reasoning, ceilingOverrides));
-		} else if (field === "vision") {
-			const vision = await promptVision(ctx, opts.vision);
-			if (vision === null) continue;
-			await mutateModel(ctx, providerId, modelId, (m) => { m.input = vision ? ["text", "image"] : ["text"]; });
+		} else if (field === "image") {
+			const image = await promptImage(ctx, opts.image);
+			if (image === null) continue;
+			await mutateModel(ctx, providerId, modelId, (m) => { m.input = image ? ["text", "image"] : ["text"]; });
 		} else if (field === "context") {
 			const result = await promptContextWindow(ctx, typeof model.contextWindow === "number" ? model.contextWindow : undefined);
 			if (result === null) continue;
@@ -536,7 +536,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	const profile = AUTO_PROBE_PROFILE;
 	let gatewayWide: Map<string, ModelProbeInfo> | undefined;
 	if (style !== "ollama") {
-		ctx.ui.notify("Fetching model metadata (context, vision, reasoning) ...", "info");
+		ctx.ui.notify("Fetching model metadata (context, image/video, reasoning) ...", "info");
 		gatewayWide = await fetchGatewayWideInfo(style, apiKey, probed.baseUrl, profile);
 		if (gatewayWide.size > 0) {
 			for (const [id, info] of gatewayWide) {

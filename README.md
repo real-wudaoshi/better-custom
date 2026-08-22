@@ -38,7 +38,7 @@ required.
   URLs fall back to `https://`. On failure you can retry or switch to manual
   entry.
 - Auto-detects model metadata while probing:
-  - context window, max output tokens, vision, and reasoning support/levels
+  - context window, max output tokens, image/video input, and reasoning support/levels
   - sources: OpenAI `GET /models/{id}` (incl. `capabilities.reasoning.effort_options`),
     inline `/models` list metadata (OpenRouter etc.), LiteLLM proxy
     `GET /model/info` (one call covers every model), One API / New API
@@ -48,7 +48,7 @@ required.
   - every field is resolved in four tiers — detected from the gateway, then
     the models.dev catalog (tagged `[models.dev]`, exact per-model entries),
     then the built-in known-model rules (tagged `[local rules]`), then the
-    defaults (`vision: false`, `reasoning: true`); detected values are
+    defaults (`image: false`, `video: false`, `reasoning: true`); detected values are
     written into the model entries
 - Multi-select model picker for probed models, showing metadata inline — only
   values that differ from the defaults are shown (e.g. a model probed as
@@ -60,8 +60,10 @@ required.
   keeps sending `system` instead of failing with a 400. When the probe is
   inconclusive it defaults to off, which every endpoint accepts. Tune later
   via Edit provider → Developer role
-- Image input follows the probe (default off): vision-capable models get
-  `input: ["text", "image"]`, everything else stays text-only
+- Image input follows the probe (default off): image-capable models get
+  `input: ["text", "image"]`, everything else stays text-only. Video input is
+  tracked too and shown as a picker tag, but pi's model config has no video
+  slot, so it is display-only
 - Reasoning enabled by default at the `xhigh` ceiling for newly added models
 - Safe delete flow for whole providers or individual models
 
@@ -149,7 +151,7 @@ Pick a provider, then choose:
   own auto-detection
 - Edit per model — pick a model and edit a single field:
   - Reasoning ceiling (`off` → `max`)
-  - Vision (text+image vs text-only)
+  - Image input (text+image vs text-only)
   - Context window
   - Max output tokens
   - Headers / endpoint override (per-model `baseUrl` and JSON `headers`)
@@ -187,7 +189,7 @@ real per-model values before writing the config:
 | Site catalog `GET {site}/api/models/public` | No-auth authoritative `context_window` (plus capability flags when published) for every published model (USTC-style sites; `api.` → `llm.` host fallback) — overrides LiteLLM-reported values |
 | LiteLLM `GET /model_group/info` | Server-root endpoint (requires api key) with per-`model_group` capabilities: `max_input_tokens`, `supports_reasoning`, `supports_vision` — tried at the baseUrl's origin first (`/v1/model_group/info` is 404) |
 | One API / New API | `supported_endpoint_types` (chat/embeddings/…) shown in the picker; fork/`meta` fields (`context_window`, `max_tokens`, `capabilities.vision`/`reasoning`, `supports_vision`/`supports_reasoning`) parsed from list entries and `GET /models/{id}` |
-| Ollama `/api/tags` + `/api/show` | vision capability, `model_info` context length (`.context_length` keys) |
+| Ollama `/api/tags` + `/api/show` | `vision` capability (mapped to image input), `model_info` context length (`.context_length` keys) |
 
 LiteLLM proxies are detected automatically: the wizard calls `GET /model/info`
 first (a single request covering all models — at the server root, then under
@@ -206,19 +208,19 @@ exposes `meta` fields — `context_window`, `max_tokens`, `capabilities.vision` 
 
 When a gateway exposes no metadata at all (stock One API / New API, bare
 proxies, manually added models), the wizard classifies the model id against a
-built-in rule table covering the major families and presets three fields:
-`contextWindow`, `vision`, and `reasoning`:
+built-in rule table covering the major families and presets these fields:
+`contextWindow`, `image`, `video`, and `reasoning`:
 
-- **OpenAI** — gpt-5.x (272K), gpt-5-mini (128K), gpt-4o (128K, vision),
+- **OpenAI** — gpt-5.x (272K), gpt-5-mini (128K), gpt-4o (128K, image),
   gpt-4.1 (1M), o1/o3/o4 (200K, reasoning)
-- **Anthropic** — claude-4/4.5/4.6 (1M or 200K, vision, reasoning),
+- **Anthropic** — claude-4/4.5/4.6 (1M or 200K, image, reasoning),
   claude-3.7-sonnet (200K, reasoning), claude-3.x (200K)
 - **DeepSeek** — v4 (1M, reasoning), v3/chat/reasoner/r1 (128K, reasoning)
 - **Qwen** — qwen3.x / qwen2.5 (128K, reasoning for thinking variants),
-  `-non-thinking` variants flagged as non-reasoning, `-vl` variants vision,
+  `-non-thinking` variants flagged as non-reasoning, `-vl` variants image,
   qwen2.5-turbo (1M), qwen-long (10M)
 - **Kimi** — kimi-k2/k2.5 (256K, reasoning), kimi-k1.5, moonshot-v1
-- **GLM** — glm-5/4.5/z1 (reasoning), glm-4 (128K), glm-4v (vision),
+- **GLM** — glm-5/4.5/z1 (reasoning), glm-4 (128K), glm-4v (image),
   glm-4-long (1M)
 - plus Gemini, Llama, Mistral, GPT-OSS
 

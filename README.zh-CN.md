@@ -33,7 +33,7 @@ LLM provider——无需手工编辑 `models.json` / `models.yml`。
   的变体(比如 USTC 的 LiteLLM 在 `/v1/models` 上会挂起,但在根路径正常),
   非本地的 `http://` 地址自动回退到 `https://`。失败后可以重试或改手动输入
 - 探测时自动检测模型元数据:
-  - 上下文窗口、最大输出 token、vision、reasoning 支持/档位
+  - 上下文窗口、最大输出 token、image/video 输入、reasoning 支持/档位
   - 来源: OpenAI `GET /models/{id}`(含 `capabilities.reasoning.effort_options`)、
     `/models` 列表内联元数据(OpenRouter 等)、LiteLLM 代理
     `GET /model/info`(一次请求覆盖所有模型)、One API / New API 的
@@ -41,17 +41,18 @@ LLM provider——无需手工编辑 `models.json` / `models.yml`。
     `/v1beta/models`(`inputTokenLimit`),以及 Ollama 原生的
     `/api/tags` + `/api/show`
   - 每个字段按四层解析:网关实测 > models.dev 目录(标记 `[models.dev]`,精确到单个模型)
-    > 内置已知模型规则(标记 `[local rules]`)> 默认值(`vision: false`、`reasoning: true`),最终值写入模型条目
+    > 内置已知模型规则(标记 `[local rules]`)> 默认值(`image: false`、`video: false`、`reasoning: true`),最终值写入模型条目
 - 探测结果使用多选模型选择器,内联展示元数据 —— 只显示与默认值不同的项
-  (比如实测不支持 vision 的模型不会显示任何标记)
+  (比如实测不支持图像输入的模型不会显示任何标记)
 - provider 名称唯一 —— 向导拒绝覆盖已有 provider
 - 添加时会自动探测 developer role 支持(一次极小的 chat completion):
   拒绝 OpenAI `developer` 角色的端点(比如 Kimi 订阅端点)会写入
   `compat.supportsDeveloperRole: false`,pi 就会继续发 `system` 而不是
   报 400。探测结果不确定时默认关闭 —— 所有端点都接受 `system`。之后可通过
   "编辑 provider → Developer role" 调整
-- 图像输入跟随探测结果(默认关闭):支持 vision 的模型写入
-  `input: ["text", "image"]`,其余保持纯文本
+- 图像输入跟随探测结果(默认关闭):支持图像输入的模型写入
+  `input: ["text", "image"]`,其余保持纯文本。视频输入也会被探测并作为
+  选择器标签展示,但 pi 的模型配置没有 video 字段,所以仅用于展示
 - 新添加的模型默认开启 reasoning,上限为 `xhigh`
 - 安全的删除流程,支持删除整个 provider 或单个模型
 
@@ -133,7 +134,7 @@ pi install /path/to/better-custom
   重新探测、手动强制开/关,或回落到 pi 自己的自动检测
 - 逐模型编辑 —— 选一个模型,编辑单个字段:
   - Reasoning 上限(`off` → `max`)
-  - Vision(text+image 或纯文本)
+  - 图像输入(text+image 或纯文本)
   - 上下文窗口
   - 最大输出 token
   - Headers / 端点覆盖(模型级 `baseUrl` 和 JSON `headers`)
@@ -170,7 +171,7 @@ pi 有七个 thinking 档位:`off, minimal, low, medium, high, xhigh, max`。
 | 站点目录 `GET {site}/api/models/public` | 免鉴权的权威 `context_window`(发布时也会带上能力标志)(USTC 风格站点;`api.` → `llm.` 域名回落)—— 覆盖 LiteLLM 上报的值 |
 | LiteLLM `GET /model_group/info` | 服务器根路径端点(需要 api key),按 `model_group` 提供能力:`max_input_tokens`、`supports_reasoning`、`supports_vision` —— 优先在 baseUrl 的 origin 上尝试(`/v1/model_group/info` 是 404) |
 | One API / New API | 选择器中展示 `supported_endpoint_types`(chat/embeddings/…);从列表条目和 `GET /models/{id}` 解析 fork/`meta` 字段(`context_window`、`max_tokens`、`capabilities.vision`/`reasoning`、`supports_vision`/`supports_reasoning`) |
-| Ollama `/api/tags` + `/api/show` | vision 能力、`model_info` 中的上下文长度(`.context_length` 键) |
+| Ollama `/api/tags` + `/api/show` | `vision` 能力(映射为 image 输入)、`model_info` 中的上下文长度(`.context_length` 键) |
 
 LiteLLM 代理会被自动识别:向导先调用 `GET /model/info`(一次请求覆盖所有
 模型 —— 先试服务器根路径,再试 base URL 路径下),有 api key 时再调用服务器
@@ -187,19 +188,19 @@ LiteLLM 代理会被自动识别:向导先调用 `GET /model/info`(一次请求�
 ### 知名模型回落(本地规则)
 
 当网关完全不暴露元数据时(原版 One API / New API、裸代理、手动添加的
-模型),向导会用内置规则表对模型 id 分类,预设三个字段:`contextWindow`、
-`vision`、`reasoning`:
+模型),向导会用内置规则表对模型 id 分类,预设这些字段:`contextWindow`、
+`image`、`video`、`reasoning`:
 
-- **OpenAI** —— gpt-5.x (272K)、gpt-5-mini (128K)、gpt-4o (128K, vision)、
+- **OpenAI** —— gpt-5.x (272K)、gpt-5-mini (128K)、gpt-4o (128K, image)、
   gpt-4.1 (1M)、o1/o3/o4 (200K, reasoning)
-- **Anthropic** —— claude-4/4.5/4.6 (1M 或 200K, vision, reasoning)、
+- **Anthropic** —— claude-4/4.5/4.6 (1M 或 200K, image, reasoning)、
   claude-3.7-sonnet (200K, reasoning)、claude-3.x (200K)
 - **DeepSeek** —— v4 (1M, reasoning)、v3/chat/reasoner/r1 (128K, reasoning)
 - **Qwen** —— qwen3.x / qwen2.5 (128K, thinking 变体带 reasoning)、
-  `-non-thinking` 变体标记为不支持 reasoning、`-vl` 变体支持 vision、
+  `-non-thinking` 变体标记为不支持 reasoning、`-vl` 变体支持 image、
   qwen2.5-turbo (1M)、qwen-long (10M)
 - **Kimi** —— kimi-k2/k2.5 (256K, reasoning)、kimi-k1.5、moonshot-v1
-- **GLM** —— glm-5/4.5/z1 (reasoning)、glm-4 (128K)、glm-4v (vision)、
+- **GLM** —— glm-5/4.5/z1 (reasoning)、glm-4 (128K)、glm-4v (image)、
   glm-4-long (1M)
 - 另有 Gemini、Llama、Mistral、GPT-OSS
 

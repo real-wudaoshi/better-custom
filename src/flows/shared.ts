@@ -104,7 +104,7 @@ export function providerModelItems(provider: any): SelectItem[] {
 					const opts = readModelOptions(model);
 					details.push(`reasoning:${opts.reasoning}`);
 				}
-				if (Array.isArray(model.input) && model.input.includes("image")) details.push("vision");
+				if (Array.isArray(model.input) && model.input.includes("image")) details.push("image");
 				if (typeof model.contextWindow === "number") details.push(`context ${model.contextWindow}`);
 			}
 
@@ -207,11 +207,11 @@ export async function addModelEntriesToProvider(
 		return;
 	}
 
-	// Added models default to reasoning on (xhigh ceiling); vision and context
+	// Added models default to reasoning on (xhigh ceiling); image and context
 	// come from the probe, then models.dev, then the local rules, then
-	// model-probe's defaults (vision off, reasoning on). Tune per model later
+	// model-probe's defaults (image off, reasoning on). Tune per model later
 	// via Edit provider → Edit a model.
-	const defaultOpts: ModelOptions = { reasoning: "xhigh", vision: true };
+	const defaultOpts: ModelOptions = { reasoning: "xhigh", image: true };
 	let detectedCount = 0;
 	const saved = await mutateProvider(ctx, providerId, (p) => {
 		const models = Array.isArray(p.models) ? p.models : [];
@@ -271,7 +271,7 @@ export async function collectProbedModelInfo(
 	gatewayWide?: Map<string, ModelProbeInfo>,
 	modelsDev?: Map<string, ModelProbeInfo>,
 ): Promise<Map<string, ModelProbeInfo>> {
-	ctx.ui.notify("Fetching model metadata (context, vision, reasoning) ...", "info");
+	ctx.ui.notify("Fetching model metadata (context, image/video, reasoning) ...", "info");
 	const profile = AUTO_PROBE_PROFILE;
 	const resolvedKey = resolveApiKeyForProbe(apiKey.mode, apiKey.value);
 

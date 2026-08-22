@@ -117,10 +117,10 @@ async function addFromCatalog(ctx: CommandContext) {
 		endpoint,
 		apiKey,
 		dedupe(ids),
-		// The reasoning ceiling for thinking models defaults to xhigh; vision /
+		// The reasoning ceiling for thinking models defaults to xhigh; image /
 		// context / reasoning come from the catalog. Tune per model later via
 		// Edit provider → Edit a model.
-		{ reasoning: "xhigh", vision: true },
+		{ reasoning: "xhigh", image: true },
 		undefined,
 		infoById,
 		undefined,
@@ -171,7 +171,7 @@ async function collectModelIds(
 			// it shows real detected values instead of catalog/rule guesses.
 			let gatewayWide: Map<string, ModelProbeInfo> | undefined;
 			if (AUTO_PROBE_PROFILE.modelInfo || AUTO_PROBE_PROFILE.publicCatalog || AUTO_PROBE_PROFILE.modelGroupInfo) {
-				ctx.ui.notify("Fetching model metadata (context, vision, reasoning) ...", "info");
+				ctx.ui.notify("Fetching model metadata (context, image/video, reasoning) ...", "info");
 				gatewayWide = await fetchGatewayWideInfo(style, apiKey, probed.baseUrl, AUTO_PROBE_PROFILE);
 				if (gatewayWide.size > 0) {
 					for (const [id, info] of gatewayWide) {
@@ -254,11 +254,11 @@ async function addCustom(ctx: CommandContext) {
 		collected.baseUrl ?? endpoint.normalized,
 		apiKey,
 		dedupe(collected.ids),
-		// The reasoning ceiling for thinking models defaults to xhigh; vision /
+		// The reasoning ceiling for thinking models defaults to xhigh; image /
 		// context / reasoning come from the probe (models.dev, local rules,
 		// then model-probe defaults). Tune per model later via Edit provider →
 		// Edit a model.
-		{ reasoning: "xhigh", vision: true },
+		{ reasoning: "xhigh", image: true },
 		undefined,
 		collected.infoById,
 		developerRole,
@@ -279,7 +279,7 @@ async function addCustom(ctx: CommandContext) {
 	if (inferredCount > 0) summary.push(`inferred from known models ${inferredCount}`);
 	if (defaultedCount > 0) summary.push(`defaults ${defaultedCount}`);
 	ctx.ui.notify(
-		`Saved provider "${providerId}" to ${MODELS_JSON_PATH}` + (summary.length > 0 ? ` — context/vision/reasoning: ${summary.join(", ")}` : ""),
+		`Saved provider "${providerId}" to ${MODELS_JSON_PATH}` + (summary.length > 0 ? ` — context/image/reasoning: ${summary.join(", ")}` : ""),
 		"info",
 	);
 	ctx.ui.notify("Open /model to use your new provider.", "info");
