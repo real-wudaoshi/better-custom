@@ -82,18 +82,6 @@ export function buildProbeUrl(baseUrl: string): string {
 	return new URL("models", withSlash).toString();
 }
 
-// Some gateways (LiteLLM, One API, New API) mount the API under /v1. When the
-// user enters a bare host for one of those, fill the version prefix in.
-export function ensureV1Path(endpoint: string): string {
-	try {
-		const url = new URL(endpoint);
-		if (url.pathname === "" || url.pathname === "/") url.pathname = "/v1";
-		return url.toString().replace(/\/+$/, "");
-	} catch {
-		return endpoint;
-	}
-}
-
 export function getPath(obj: any, path: string): any {
 	let current = obj;
 	for (const key of path.split(".")) {

@@ -1,6 +1,8 @@
 import {
 	fetchModelsDevInfoForBaseUrl,
+	fetchModelsDevModels,
 	fetchModelsDevProviders,
+	finalizeModelInfo,
 	probeDeveloperRole,
 	probeInfoSummary,
 	probeModels,
@@ -9,23 +11,15 @@ import {
 import { resolveApiKeyForProbe } from "../api-key.ts";
 import { loadModelsConfig, MODELS_JSON_PATH } from "../config.ts";
 import { buildProviderConfig } from "../model-entry.ts";
-import { gatewayPreset } from "../presets.ts";
-import type { GatewayPresetId } from "../presets.ts";
+import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { ApiKeyMode, CommandContext, ModelProbeInfo, ModelsConfig, ProviderApi, ProviderStyle } from "../types.ts";
 import { pickMany, selectOne } from "../ui/select.ts";
-import {
-	promptApiKey,
-	promptEndpoint,
-	promptGatewayPreset,
-	promptModelIdsOneByOne,
-	promptProviderId,
-	promptProviderStyle,
-} from "../ui/prompts.ts";
-import { buildProbeUrl, dedupe, ensureV1Path, hasExplicitScheme, normalizeEndpoint } from "../url.ts";
+import { promptApiKey, promptEndpoint, promptModelIdsOneByOne, promptProviderId, promptProviderStyle } from "../ui/prompts.ts";
+import { buildProbeUrl, dedupe, hasExplicitScheme, normalizeEndpoint } from "../url.ts";
 import { collectProbedModelInfo, fetchGatewayWideInfo, findProvidersByEndpoint, persistProvider, probePickerItems } from "./shared.ts";
 
-// Pick a known API provider from the models.dev catalog; returns its endpoint.
-async function pickCatalogEndpoint(ctx: CommandContext, api: ProviderApi): Promise<{ normalized: string; raw: string } | null> {
+// Pick a known API provider from the models.dev catalog.
+async function pickCatalogProvider(ctx: CommandContext): Promise<ModelsDevProvider | null> {
 	ctx.ui.notify("Fetching the models.dev provider catalog ...", "info");
 	let providers: Map<string, ModelsDevProvider>;
 	try {
@@ -46,17 +40,7 @@ async function pickCatalogEndpoint(ctx: CommandContext, api: ProviderApi): Promi
 		}));
 	const choice = await selectOne(ctx, "models.dev providers", items);
 	if (!choice) return null;
-	const provider = providers.get(choice);
-	if (!provider) return null;
-	if (provider.env.length > 0) {
-		ctx.ui.notify(`${provider.name} expects the ${provider.env.join(" / ")} env var.`, "info");
-	}
-	try {
-		return { normalized: normalizeEndpoint(provider.baseUrl, api), raw: provider.baseUrl };
-	} catch (error) {
-		ctx.ui.notify(`Invalid catalog endpoint "${provider.baseUrl}": ${error instanceof Error ? error.message : String(error)}`, "error");
-		return null;
-	}
+	return providers.get(choice) ?? null;
 }
 
 async function confirmEndpointReuse(ctx: CommandContext, normalizedEndpoint: string): Promise<boolean> {
@@ -77,6 +61,83 @@ async function confirmEndpointReuse(ctx: CommandContext, normalizedEndpoint: str
 	);
 }
 
+// Catalog path: the provider is known to models.dev, so the model list and
+// its metadata come from the catalog — no probing of the gateway at all.
+async function addFromCatalog(ctx: CommandContext) {
+	const provider = await pickCatalogProvider(ctx);
+	if (!provider) return;
+
+	// Catalog providers are OpenAI-compatible by construction (they carry a
+	// baseUrl); chat completions is the flavor every one of them supports.
+	const style: ProviderStyle = "openai";
+	const api: ProviderApi = "openai-completions";
+
+	let endpoint: string;
+	try {
+		endpoint = normalizeEndpoint(provider.baseUrl, api);
+	} catch (error) {
+		ctx.ui.notify(`Invalid catalog endpoint "${provider.baseUrl}": ${error instanceof Error ? error.message : String(error)}`, "error");
+		return;
+	}
+	if (!(await confirmEndpointReuse(ctx, endpoint))) return;
+
+	if (provider.env.length > 0) {
+		ctx.ui.notify(`${provider.name} expects the ${provider.env.join(" / ")} env var.`, "info");
+	}
+	const providerId = await promptProviderId(ctx, endpoint, provider.id);
+	if (!providerId) return;
+
+	const apiKey = await promptApiKey(ctx);
+	if (!apiKey) return;
+	if (apiKey.mode === "none") {
+		ctx.ui.notify('No API key selected. Using "dummy" automatically in the models config.', "info");
+	}
+
+	ctx.ui.notify(`Fetching the model list for ${provider.name} from models.dev ...`, "info");
+	const catalog = await fetchModelsDevModels(provider.id);
+	let ids: string[];
+	let infoById: Map<string, ModelProbeInfo> | undefined;
+	if (catalog.size > 0) {
+		const picked = await pickMany(ctx, "Select models", probePickerItems([...catalog.keys()], new Map(), catalog));
+		if (!picked || picked.length === 0) return;
+		ids = picked;
+		infoById = finalizeModelInfo(picked, [], { modelsDev: catalog });
+	} else {
+		ctx.ui.notify(`models.dev lists no models for ${provider.name} — enter ids by hand.`, "warning");
+		const manual = await promptModelIdsOneByOne(ctx, style);
+		if (!manual) return;
+		ids = manual;
+	}
+
+	// No gateway calls on this path — developer-role support stays at the safe
+	// default (off). Flip it later via Edit provider if the endpoint supports it.
+	const providerConfig = buildProviderConfig(
+		style,
+		api,
+		endpoint,
+		apiKey,
+		dedupe(ids),
+		// The reasoning ceiling for thinking models defaults to xhigh; vision /
+		// context / reasoning come from the catalog. Tune per model later via
+		// Edit provider → Edit a model.
+		{ reasoning: "xhigh", vision: true },
+		undefined,
+		infoById,
+		undefined,
+	);
+	if (!(await persistProvider(ctx, providerId, providerConfig))) return;
+
+	const withMeta = infoById ? ids.filter((id) => probeInfoSummary(infoById.get(id) ?? {}).length > 0).length : 0;
+	ctx.ui.notify(
+		`Saved provider "${providerId}" to ${MODELS_JSON_PATH} — models and metadata from models.dev` +
+			(withMeta > 0 ? ` (${withMeta} model${withMeta === 1 ? "" : "s"} with metadata)` : ""),
+		"info",
+	);
+	ctx.ui.notify("Open /model to use your new provider.", "info");
+}
+
+// Model collection for a custom endpoint: auto-detect probes the gateway,
+// manual entry skips all network calls.
 async function collectModelIds(
 	ctx: CommandContext,
 	style: ProviderStyle,
@@ -85,32 +146,18 @@ async function collectModelIds(
 	normalizedEndpoint: string,
 	trimmedEndpointInput: string,
 ): Promise<{ ids: string[]; infoById?: Map<string, ModelProbeInfo>; baseUrl?: string } | null> {
-	const modelMode = await selectOne(ctx, "Models", ["Auto probe from /models", "Add manually"]);
+	const modelMode = await selectOne(ctx, "Models", ["Auto-detect from the endpoint", "Add manually"]);
 	if (!modelMode) return null;
-	if (modelMode !== "Auto probe from /models") {
+	if (modelMode !== "Auto-detect from the endpoint") {
 		const ids = await promptModelIdsOneByOne(ctx, style);
 		return ids ? { ids } : null;
 	}
 
-	// Auto probe: pick the gateway type as part of probing — it tunes which
-	// metadata sources are tried and whether a bare host gets /v1. Gateways
-	// like LiteLLM / One API / New API expose several API flavors behind one
-	// endpoint, so the preset applies to every style except Ollama and Gemini,
-	// which have their own native probing.
 	let baseUrl = normalizedEndpoint;
 	while (true) {
-		let presetId: GatewayPresetId = "auto";
-		if (style !== "ollama" && style !== "gemini") {
-			const preset = await promptGatewayPreset(ctx);
-			if (!preset) return null;
-			presetId = preset;
-		}
-		const preset = gatewayPreset(presetId);
-		const probeBase = preset.ensureV1 ? ensureV1Path(baseUrl) : baseUrl;
-
 		try {
-			ctx.ui.notify(`Probing ${buildProbeUrl(probeBase)} ...`, "info");
-			const probed = await probeModels(probeBase, resolveApiKeyForProbe(apiKey.mode, apiKey.value));
+			ctx.ui.notify(`Probing ${buildProbeUrl(baseUrl)} ...`, "info");
+			const probed = await probeModels(baseUrl, resolveApiKeyForProbe(apiKey.mode, apiKey.value));
 			// The variant that actually answered (±/v1 adapted) becomes the
 			// provider's baseUrl.
 			baseUrl = probed.baseUrl;
@@ -121,12 +168,11 @@ async function collectModelIds(
 			}
 
 			// Gateway-wide metadata (one call per source) — fetch BEFORE the picker so
-			// it shows real detected values instead of local-rule guesses.
-			const profile = preset.profile;
+			// it shows real detected values instead of catalog/rule guesses.
 			let gatewayWide: Map<string, ModelProbeInfo> | undefined;
-			if (profile.modelInfo || profile.publicCatalog || profile.modelGroupInfo) {
+			if (AUTO_PROBE_PROFILE.modelInfo || AUTO_PROBE_PROFILE.publicCatalog || AUTO_PROBE_PROFILE.modelGroupInfo) {
 				ctx.ui.notify("Fetching model metadata (context, vision, reasoning) ...", "info");
-				gatewayWide = await fetchGatewayWideInfo(style, apiKey, probed.baseUrl, profile);
+				gatewayWide = await fetchGatewayWideInfo(style, apiKey, probed.baseUrl, AUTO_PROBE_PROFILE);
 				if (gatewayWide.size > 0) {
 					for (const [id, info] of gatewayWide) {
 						probed.infoById.set(id, { ...(probed.infoById.get(id) ?? {}), ...info });
@@ -135,55 +181,37 @@ async function collectModelIds(
 			}
 
 			// models.dev catalog tier — above the local rules, below detected values.
-			const modelsDev = profile.modelsDev ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl) : undefined;
+			const modelsDev = style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl) : undefined;
 
 			const picked = await pickMany(ctx, "Select models", probePickerItems(probed.ids, probed.infoById, modelsDev));
 			if (!picked || picked.length === 0) return null;
 
-			const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, presetId, gatewayWide, modelsDev);
+			const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, gatewayWide, modelsDev);
 			return { ids: picked, infoById, baseUrl };
 		} catch (error) {
 			const schemeHint = hasExplicitScheme(trimmedEndpointInput) ? "" : " No http:// or https:// was provided.";
 			ctx.ui.notify(`Auto probe failed: ${error instanceof Error ? error.message : String(error)}.${schemeHint}`, "warning");
 			const action = await selectOne(ctx, "Probe failed — what next?", [
-				{
-					value: "retry",
-					label: "Retry",
-					description: style === "ollama" || style === "gemini" ? "Probe again" : "Pick the gateway type again and probe again",
-				},
+				{ value: "retry", label: "Retry", description: "Probe again" },
 				{ value: "manual", label: "Add models manually", description: "Enter model ids by hand" },
 				{ value: "cancel", label: "Cancel", description: "Abort adding this provider" },
 			]);
 			if (action === "retry") continue;
 			if (action === "manual") {
 				const ids = await promptModelIdsOneByOne(ctx, style);
-				// The chosen preset still tells us the URL shape (e.g. New API needs /v1).
-				const manualBase = preset.ensureV1 ? ensureV1Path(baseUrl) : baseUrl;
-				return ids ? { ids, baseUrl: manualBase } : null;
+				return ids ? { ids, baseUrl } : null;
 			}
 			return null;
 		}
 	}
 }
 
-export async function addProviderFlow(ctx: CommandContext) {
+async function addCustom(ctx: CommandContext) {
 	const styleChoice = await promptProviderStyle(ctx);
 	if (!styleChoice) return;
 	const { style, api } = styleChoice;
 
-	// OpenAI-style endpoints can be picked straight from the models.dev catalog
-	// (known providers + their base URLs) instead of typing the URL by hand.
-	let endpoint: { normalized: string; raw: string } | null;
-	if (style === "openai" || style === "openai-responses") {
-		const source = await selectOne(ctx, "Endpoint source", [
-			{ value: "catalog", label: "Pick from models.dev catalog", description: "Known API providers with their base URLs (OpenRouter, DeepSeek, ...)" },
-			{ value: "manual", label: "Enter manually", description: "Type the endpoint URL yourself" },
-		]);
-		if (!source) return;
-		endpoint = source === "catalog" ? await pickCatalogEndpoint(ctx, api) : await promptEndpoint(ctx, style, api);
-	} else {
-		endpoint = await promptEndpoint(ctx, style, api);
-	}
+	const endpoint = await promptEndpoint(ctx, style, api);
 	if (!endpoint) return;
 	if (!(await confirmEndpointReuse(ctx, endpoint.normalized))) return;
 
@@ -222,7 +250,7 @@ export async function addProviderFlow(ctx: CommandContext) {
 		style,
 		api,
 		// After a successful probe this is the base variant that actually
-		// answered; otherwise the endpoint as entered (±/v1 from the preset).
+		// answered; otherwise the endpoint as entered.
 		collected.baseUrl ?? endpoint.normalized,
 		apiKey,
 		dedupe(collected.ids),
@@ -255,4 +283,17 @@ export async function addProviderFlow(ctx: CommandContext) {
 		"info",
 	);
 	ctx.ui.notify("Open /model to use your new provider.", "info");
+}
+
+export async function addProviderFlow(ctx: CommandContext) {
+	const source = await selectOne(ctx, "Add provider", [
+		{
+			value: "catalog",
+			label: "From models.dev catalog",
+			description: "Known API providers (OpenRouter, DeepSeek, ...) — model list and metadata from models.dev, no probing",
+		},
+		{ value: "custom", label: "Custom endpoint", description: "Any compatible endpoint — auto-detect models, or add them by hand" },
+	]);
+	if (source === "catalog") return addFromCatalog(ctx);
+	if (source === "custom") return addCustom(ctx);
 }

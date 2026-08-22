@@ -2,7 +2,7 @@ import { fetchModelsDevInfoForBaseUrl, probeDeveloperRole, probeModels } from "m
 import { apiKeyFromProvider, resolveApiKeyForProbe } from "../api-key.ts";
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, saveModelsConfig } from "../config.ts";
 import { applyReasoning, buildModelEntry, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
-import { gatewayPreset } from "../presets.ts";
+import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { CommandContext, ModelProbeInfo, ModelsConfig, ProbeResult, ProviderApi, ProviderStyle } from "../types.ts";
 import { pickMany, selectOne } from "../ui/select.ts";
 import {
@@ -533,7 +533,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	// Gateway-wide metadata (one call per source) — fetch BEFORE the picker so
 	// it shows real detected values instead of local-rule guesses. Re-probe
 	// always uses the auto profile.
-	const profile = gatewayPreset("auto").profile;
+	const profile = AUTO_PROBE_PROFILE;
 	let gatewayWide: Map<string, ModelProbeInfo> | undefined;
 	if (style !== "ollama") {
 		ctx.ui.notify("Fetching model metadata (context, vision, reasoning) ...", "info");
@@ -551,7 +551,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	const picked = await pickMany(ctx, `New models for ${providerId}`, probePickerItems(novelIds, probed.infoById, modelsDev));
 	if (!picked || picked.length === 0) return;
 
-	const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, "auto", gatewayWide, modelsDev);
+	const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, gatewayWide, modelsDev);
 	await addModelEntriesToProvider(ctx, providerId, picked, infoById);
 }
 

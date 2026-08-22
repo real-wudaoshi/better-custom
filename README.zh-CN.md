@@ -26,14 +26,12 @@ LLM provider——无需手工编辑 `models.json` / `models.yml`。
   - 重新探测时仍会解析已有的 `$ENV` 和 `!command` key
 - 对 OpenAI 兼容和 Gemini 端点自动探测 `/models`
 - 内置 [models.dev](https://models.dev) provider 目录 —— 直接挑选已知 API
-  站点(OpenRouter、DeepSeek、Groq、xAI 等),不用手敲 base URL;
-  models.dev 访问不了时自动回退到 GitHub/jsDelivr 镜像
-- 探测步骤内可选网关预设 —— LiteLLM、One API、New API、OpenRouter
-  或通用 OpenAI 兼容(vLLM、LM Studio 等)—— 向导只探测该网关实际暴露的
-  元数据来源(Auto-detect 会全部尝试)。预设对任何 API 格式都适用 ——
-  New API 这类网关在同一端点后同时提供 completions、responses、anthropic
-  格式 —— 且 LiteLLM / One API / New API 可以直接填裸域名(自动补 `/v1`)。
-  探测失败时可以换个网关类型重试,或改用手动输入
+  站点(OpenRouter、DeepSeek、Groq、xAI 等),完全跳过探测:模型列表和
+  元数据全部来自目录(官方 SDK,带 jsDelivr 保鲜层和内置离线快照)
+- 自定义端点用统一的 auto-detect 档案探测 —— 自动尝试所有已知元数据来源。
+  探测是路径自适应的:`/models` 在给定 base 上没响应时自动尝试加/去 `/v1`
+  的变体(比如 USTC 的 LiteLLM 在 `/v1/models` 上会挂起,但在根路径正常),
+  非本地的 `http://` 地址自动回退到 `https://`。失败后可以重试或改手动输入
 - 探测时自动检测模型元数据:
   - 上下文窗口、最大输出 token、vision、reasoning 支持/档位
   - 来源: OpenAI `GET /models/{id}`(含 `capabilities.reasoning.effort_options`)、
@@ -99,28 +97,30 @@ pi install /path/to/better-custom
 
 ### 添加 provider
 
-依次引导你完成:
+第一步选择:**从 models.dev 目录添加** 或 **自定义端点**。
+
+从 [models.dev](https://models.dev) 目录添加(走官方 SDK):
+
+- 挑选已知 API provider(OpenRouter、DeepSeek、Groq、xAI 等)——
+  base URL、env 变量名、完整模型列表都来自目录
+- provider 名称(默认用目录 id,必须唯一)
+- API key 方式(API key 或 none)
+- 多选模型选择器,内联显示目录元数据 —— 完全不探测;models.dev 访问不了时
+  由 jsDelivr 上的最新快照和 SDK 内置快照兜底
+
+自定义端点:
 
 - provider 类型(OpenAI Chat Completions / OpenAI Responses / Anthropic /
   Gemini / Ollama)
-- 端点地址 —— 手动输入(裸域名也可以,探测自动适配 ±`/v1`),或从
-  [models.dev](https://models.dev) 目录里挑(仅限 OpenAI 风格的 provider):
-  里面是已知 API 站点的 base URL 和 env 变量名。models.dev 本身访问不了时
-  会自动回退到其数据仓库的 GitHub/jsDelivr 镜像
+- 端点地址
 - provider 名称(必须唯一)
 - API key 方式(API key 或 none)
-- 模型发现(自动探测 `/models`)或手动输入模型
-  - 自动探测会先询问网关类型(除 Ollama 和 Gemini 外的所有类型):
-    Auto-detect、LiteLLM、One API、New API、OpenRouter 或通用 ——
-    决定探测哪些元数据来源、裸域名是否补 `/v1`。探测本身是路径自适应的:
-    如果填的 base 上 `/models` 没有响应,会自动尝试加上或去掉 `/v1` 的
-    另一个变体(有些网关 —— 比如 USTC 的 LiteLLM —— `/v1/models` 会挂起,
-    而根路径的 `/models` 正常);非本地的 `http://` 地址还会回退到
-    `https://`。失败后可以换个网关类型重试,或改用手动输入
+- 模型发现:自动探测(`/models` + 所有已知元数据来源)或手动输入。
+  失败后可以重试或改用手动输入
 
-新添加的模型按三层解析每个字段:网关实测优先,其次是内置已知模型规则,
-最后是默认值 —— 纯文本输入、`reasoning: true`(`xhigh` 上限)。之后都可以
-通过"编辑 provider"调整。
+新添加的模型按四层解析每个字段:网关实测优先,其次是 models.dev 目录
+(精确到单个模型),再次是内置已知模型规则,最后是默认值 —— 纯文本输入、
+`reasoning: true`(`xhigh` 上限)。之后都可以通过"编辑 provider"调整。
 
 ### 编辑 provider
 
@@ -259,7 +259,7 @@ npm run check   # 用 node --check 对每个源文件做语法检查
 - `src/config.ts` —— models 配置发现 + JSON/YAML 读写
 - `src/url.ts` —— 端点归一化及其他小工具
 - `src/api-key.ts` —— API key 解析/序列化助手
-- `src/presets.ts` —— 网关预设(LiteLLM、One API、New API 等)
+- `src/presets.ts` —— 探测档案(auto-detect 尝试哪些元数据来源)
 - `src/model-entry.ts` —— 模型条目与 provider 配置的构建/读取/修改
 - `src/ui/select.ts` —— 可搜索的单选/多选选择器
 - `src/ui/prompts.ts` —— 向导输入提示

@@ -27,20 +27,16 @@ required.
   - existing `$ENV` and `!command` keys are still resolved when re-probing
 - Auto-probe `/models` for OpenAI-compatible and Gemini endpoints
 - Provider catalog from [models.dev](https://models.dev) — pick a known API
-  site (OpenRouter, DeepSeek, Groq, xAI, ...) instead of typing its base URL;
-  falls back to a GitHub/jsDelivr mirror where models.dev is unreachable
-- Gateway presets inside the probe step — LiteLLM, One API, New API,
-  OpenRouter, or generic OpenAI-compatible (vLLM, LM Studio, ...) — so the
-  wizard only probes the metadata sources that gateway actually exposes
-  (Auto-detect tries everything). Presets apply to any API flavor — gateways
-  like New API serve completions, responses, and anthropic formats behind one
-  endpoint — and One API / New API accept a bare host (`/v1` is added
-  automatically). If a probe fails you can retry with a different gateway
-  type or switch to manual entry. The probe itself is path-adaptive: if
+  site (OpenRouter, DeepSeek, Groq, xAI, ...) and skip probing entirely: the
+  model list and metadata come straight from the catalog (via the official
+  SDK, with a jsDelivr freshness layer and a bundled offline snapshot)
+- Custom endpoints are probed with a single auto-detect profile — every known
+  metadata source is tried automatically. The probe is path-adaptive: if
   `/models` doesn't answer on the given base, the variant with `/v1` added or
   removed is tried automatically (some gateways, e.g. USTC's LiteLLM, hang on
   `/v1/models` while serving `/models` at the root), and non-local `http://`
-  URLs fall back to `https://`
+  URLs fall back to `https://`. On failure you can retry or switch to manual
+  entry.
 - Auto-detects model metadata while probing:
   - context window, max output tokens, vision, and reasoning support/levels
   - sources: OpenAI `GET /models/{id}` (incl. `capabilities.reasoning.effort_options`),
@@ -111,27 +107,34 @@ The wizard offers three actions:
 
 ### Add a provider
 
-Guides you through:
+First choice: **From models.dev catalog** or **Custom endpoint**.
+
+From the [models.dev](https://models.dev) catalog (via the official SDK):
+
+- pick a known API provider (OpenRouter, DeepSeek, Groq, xAI, ...) — its base
+  URL, env var names, and full model list come from the catalog
+- provider name (defaults to the catalog id, must be unique)
+- API key method (API key or none)
+- multi-select model picker with catalog metadata inline — no probing at all;
+  when models.dev is unreachable, a jsDelivr-served fresh snapshot and the
+  SDK's bundled snapshot keep this path working
+
+Custom endpoint:
 
 - provider style (OpenAI Chat Completions / OpenAI Responses / Anthropic /
   Gemini / Ollama)
-- endpoint — typed by hand, or picked from the [models.dev](https://models.dev)
-  catalog (OpenAI-style providers only): known API sites with their base URLs
-  and env var names. When models.dev itself is unreachable, the catalog falls
-  back to a GitHub/jsDelivr mirror of its data repo
+- endpoint URL
 - provider name (must be unique)
 - API key method (API key or none)
-- model discovery (auto-probe `/models`) or manual model entry
-  - auto-probe asks for the gateway type first (all styles except Ollama and
-    Gemini): Auto-detect, LiteLLM, One API, New API, OpenRouter, or generic —
-    controls which metadata sources are probed and whether a bare host gets
-    `/v1`. On failure you can retry with a different gateway type or switch
-    to manual entry.
+- model discovery: auto-detect (probes `/models` plus every known metadata
+  source) or manual entry. On failure you can retry or switch to manual
+  entry.
 
-Newly added models resolve every field in three tiers: values detected from
-the gateway win, then the built-in known-model rules, then the defaults —
-text-only input and `reasoning: true` at the `xhigh` ceiling. Tune any of this
-later via Edit provider.
+Newly added models resolve every field in four tiers: values detected from
+the gateway win, then the models.dev catalog (exact entries), then the
+built-in known-model rules, then the defaults — text-only input and
+`reasoning: true` at the `xhigh` ceiling. Tune any of this later via Edit
+provider.
 
 ### Edit a provider
 
@@ -282,7 +285,7 @@ npm run check   # syntax-check every source file with node --check
 - `src/config.ts` — models config discovery + JSON/YAML load/save
 - `src/url.ts` — endpoint normalization and other small helpers
 - `src/api-key.ts` — API key resolve/serialize helpers
-- `src/presets.ts` — gateway presets (LiteLLM, One API, New API, ...)
+- `src/presets.ts` — the probe profile (which metadata sources auto-detect tries)
 - `src/model-entry.ts` — build/read/mutate model entries and provider configs
 - `src/ui/select.ts` — searchable single/multi-select pickers
 - `src/ui/prompts.ts` — wizard input prompts

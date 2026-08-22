@@ -1,6 +1,4 @@
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig } from "../config.ts";
-import { GATEWAY_PRESETS } from "../presets.ts";
-import type { GatewayPresetId } from "../presets.ts";
 import { REASONING_LEVELS } from "../types.ts";
 import type { ApiKeyMode, CommandContext, ProviderApi, ProviderStyle, ReasoningCeiling, SelectItem } from "../types.ts";
 import { normalizeEndpoint, slugify, suggestProviderId } from "../url.ts";
@@ -141,21 +139,6 @@ export async function promptModelIdsOneByOne(
 	}
 }
 
-// Which gateway project sits behind the endpoint. Only tunes which metadata
-// sources are probed. Returns null when cancelled.
-export async function promptGatewayPreset(ctx: CommandContext): Promise<GatewayPresetId | null> {
-	const choice = await selectOne(
-		ctx,
-		"Gateway type",
-		GATEWAY_PRESETS.map((preset) => ({
-			value: preset.id,
-			label: preset.label,
-			description: preset.description,
-		})),
-	);
-	return (choice as GatewayPresetId | null) ?? null;
-}
-
 export async function promptProviderStyle(
 	ctx: CommandContext,
 ): Promise<{ style: ProviderStyle; api: ProviderApi } | null> {
@@ -212,7 +195,7 @@ export async function promptEndpoint(
 	}
 }
 
-export async function promptProviderId(ctx: CommandContext, normalizedEndpoint: string): Promise<string | null> {
+export async function promptProviderId(ctx: CommandContext, normalizedEndpoint: string, suggestion?: string): Promise<string | null> {
 	let existingIds = new Set<string>();
 	try {
 		existingIds = new Set(Object.keys(loadModelsConfig().providers ?? {}));
@@ -220,7 +203,7 @@ export async function promptProviderId(ctx: CommandContext, normalizedEndpoint: 
 		// If config can't be read, persistProvider surfaces the error later.
 	}
 
-	const providerIdSuggestion = suggestProviderId(normalizedEndpoint);
+	const providerIdSuggestion = suggestion ?? suggestProviderId(normalizedEndpoint);
 	const suggestionTaken = existingIds.has(providerIdSuggestion);
 
 	while (true) {

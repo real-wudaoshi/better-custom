@@ -10,8 +10,8 @@ import {
 import { resolveApiKeyForProbe } from "../api-key.ts";
 import { loadModelsConfig, MODELS_JSON_PATH, saveModelsConfig } from "../config.ts";
 import { buildModelEntry, modelIdOf, modelOptionsFromProbe, readModelOptions } from "../model-entry.ts";
-import { gatewayPreset } from "../presets.ts";
-import type { GatewayPresetId, GatewayProbeProfile } from "../presets.ts";
+import { AUTO_PROBE_PROFILE } from "../presets.ts";
+import type { GatewayProbeProfile } from "../presets.ts";
 import type {
 	ApiKeyMode,
 	CommandContext,
@@ -268,12 +268,11 @@ export async function collectProbedModelInfo(
 	baseUrl: string,
 	ids: string[],
 	listInfo: Map<string, ModelProbeInfo>,
-	presetId: GatewayPresetId = "auto",
 	gatewayWide?: Map<string, ModelProbeInfo>,
 	modelsDev?: Map<string, ModelProbeInfo>,
 ): Promise<Map<string, ModelProbeInfo>> {
 	ctx.ui.notify("Fetching model metadata (context, vision, reasoning) ...", "info");
-	const profile = gatewayPreset(presetId).profile;
+	const profile = AUTO_PROBE_PROFILE;
 	const resolvedKey = resolveApiKeyForProbe(apiKey.mode, apiKey.value);
 
 	const gw = gatewayWide ?? (await fetchGatewayWideInfo(style, apiKey, baseUrl, profile));
