@@ -1,4 +1,4 @@
-import { describeProbeInfo, fetchModelsDevInfoForBaseUrl, probeDeveloperRole, probeModels, resolveModelInfo } from "model-probe";
+import { describeProbeInfo, fetchModelsDevInfoForBaseUrl, probeDeveloperRole, probeModels } from "model-probe";
 import { apiKeyFromProvider, resolveApiKeyForProbe } from "../api-key.ts";
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, saveModelsConfig } from "../config.ts";
 import { applyReasoning, buildModelEntry, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
@@ -649,13 +649,14 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 		});
 	}
 	for (const id of unsupportedIds) {
-		// No probe data for these (the endpoint didn't list them) — show what
-		// the local rules resolve to, with "unsupported" as a suffix. Defaults
-		// render nothing, same as everywhere else.
+		// No fresh probe data for these — show the metadata already stored in
+		// the config, same as any other configured model, with "unsupported"
+		// as a suffix.
+		const stored = storedModels.find((m) => modelIdOf(m) === id);
 		items.push({
 			value: id,
 			label: `${id} • unsupported`,
-			description: describeProbeInfo(resolveModelInfo(id)),
+			description: storedModelSummary(stored),
 			searchText: `${id} unsupported`,
 			states: ["off", "on"],
 			initial: "on",
