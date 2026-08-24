@@ -127,7 +127,11 @@ pi install /path/to/better-custom
 
 选择一个 provider,然后可以:
 
-- 重新探测新模型 —— 再次查询 `/models`,添加尚未配置的模型
+- 重新探测模型 —— 再次查询 `/models`:勾选添加新模型;已记录但端点不再返回的
+  模型标记为 unsupported(勾选即移除);已配置模型的权威元数据(仅网关实测或
+  models.dev 的值,本地规则猜测不会改写已有配置)有变化时,逐模型选择更新
+  (`context 128000 -> 1000000`、`image [+]`、`reasoning [-]` 会显示具体变化)、
+  保持不变或删除该模型
 - 设置上下文窗口(全部模型)—— 对所有模型应用同一个 `contextWindow`
 - API flavor —— 在 Chat Completions、Responses API、Anthropic Messages、Gemini 之间切换
 - Developer role —— 端点是否接受 OpenAI 的 `developer` 角色:可以从 API

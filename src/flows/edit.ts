@@ -1,4 +1,4 @@
-import { fetchModelsDevInfoForBaseUrl, probeDeveloperRole, probeModels } from "model-probe";
+import { describeProbeInfo, fetchModelsDevInfoForBaseUrl, probeDeveloperRole, probeModels } from "model-probe";
 import { apiKeyFromProvider, resolveApiKeyForProbe } from "../api-key.ts";
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, saveModelsConfig } from "../config.ts";
 import { applyReasoning, buildModelEntry, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
@@ -22,7 +22,6 @@ import {
 	fetchGatewayWideInfo,
 	mutateModel,
 	mutateProvider,
-	probePickerItems,
 	providerModelItems,
 	removeProvider,
 } from "./shared.ts";
@@ -85,7 +84,7 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 
 		const modelCount = Array.isArray(provider.models) ? provider.models.length : 0;
 		const action = await selectOne(ctx, `Edit ${providerId}`, [
-			{ value: "probe", label: "Re-probe for new models", description: "Query /models again and add ones not already configured" },
+			{ value: "probe", label: "Re-probe for models", description: "Query /models again: add new models, flag vanished ones as unsupported, offer metadata updates" },
 			{ value: "context", label: "Set context window (all models)", description: `Apply one contextWindow to all ${modelCount} model${modelCount === 1 ? "" : "s"}` },
 			{ value: "models", label: "Edit per model", description: `${modelCount} model${modelCount === 1 ? "" : "s"} — reasoning, image input, context, max tokens, headers, delete` },
 			{ value: "add", label: "Add models manually", description: "Type model ids to add" },
@@ -485,6 +484,45 @@ async function editModelOverride(ctx: CommandContext, providerId: string, modelI
 	});
 }
 
+// Fields where a fresh probe may override the stored config. Only values
+// detected from the gateway or the models.dev catalog count as authoritative
+// — local-rule guesses and built-in defaults never rewrite an existing entry.
+const DIFFABLE_FIELDS = ["contextWindow", "image", "reasoning"] as const;
+type DiffableField = (typeof DIFFABLE_FIELDS)[number];
+type MetaChange = { field: DiffableField; label: string };
+
+// Compare a stored model entry against freshly resolved probe info. Returns
+// the authoritative differences, rendered as `context 128000 -> 1000000` for
+// the context window and `image [+]` / `reasoning [-]` for boolean fields.
+function diffStoredModel(model: any, info: ModelProbeInfo): MetaChange[] {
+	const guessed = new Set<string>([...(info.inferredFields ?? []), ...(info.defaultedFields ?? [])]);
+	const changes: MetaChange[] = [];
+	for (const field of DIFFABLE_FIELDS) {
+		const value = info[field];
+		if (value === undefined || guessed.has(field)) continue;
+		if (field === "contextWindow") {
+			const old = typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
+			if (old !== value) changes.push({ field, label: `context ${old ?? "unset"} -> ${value}` });
+		} else if (field === "image") {
+			const old = Array.isArray(model?.input) ? model.input.includes("image") : true;
+			if (old !== value) changes.push({ field, label: `image [${value ? "+" : "-"}]` });
+		} else {
+			const old = model?.reasoning === true;
+			if (old !== value) changes.push({ field, label: `reasoning [${value ? "+" : "-"}]` });
+		}
+	}
+	return changes;
+}
+
+// Write the authoritative probed values onto a stored entry in place.
+function applyMetaChanges(entry: any, info: ModelProbeInfo, changes: MetaChange[]) {
+	for (const change of changes) {
+		if (change.field === "contextWindow") entry.contextWindow = info.contextWindow;
+		else if (change.field === "image") entry.input = info.image ? ["text", "image"] : ["text"];
+		else applyReasoning(entry, info.reasoning ? "xhigh" : "off");
+	}
+}
+
 async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	let provider: any;
 	try {
@@ -514,12 +552,17 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 		return;
 	}
 
-	const existing = new Set((Array.isArray(provider.models) ? provider.models : []).map(modelIdOf));
-	const novelIds = probed.ids.filter((id) => !existing.has(id));
-	if (novelIds.length === 0) {
-		ctx.ui.notify("No new models — everything the endpoint returned is already configured.", "info");
-		return;
+	const storedModels: any[] = Array.isArray(provider.models) ? provider.models : [];
+	const storedIds: string[] = [];
+	for (const m of storedModels) {
+		const id = modelIdOf(m);
+		if (id) storedIds.push(id);
 	}
+	const storedSet = new Set(storedIds);
+	const probedSet = new Set(probed.ids);
+	const novelIds = probed.ids.filter((id) => !storedSet.has(id));
+	const overlapIds = probed.ids.filter((id) => storedSet.has(id));
+	const unsupportedIds = storedIds.filter((id) => !probedSet.has(id));
 
 	const style: ProviderStyle =
 		provider?.api === "anthropic-messages"
@@ -530,7 +573,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 					? "ollama"
 					: "openai";
 
-	// Gateway-wide metadata (one call per source) — fetch BEFORE the picker so
+	// Gateway-wide metadata (one call per source) — fetch BEFORE any picker so
 	// it shows real detected values instead of local-rule guesses. Re-probe
 	// always uses the auto profile.
 	const profile = AUTO_PROBE_PROFILE;
@@ -548,11 +591,89 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	// models.dev catalog tier — above the local rules, below detected values.
 	const modelsDev = style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl) : undefined;
 
-	const picked = await pickMany(ctx, `New models for ${providerId}`, probePickerItems(novelIds, probed.infoById, modelsDev));
-	if (!picked || picked.length === 0) return;
+	// Resolve metadata for everything we may touch: new models (to describe and
+	// add them) and already-configured ones (to diff against the stored entry).
+	const infoById = await collectProbedModelInfo(
+		ctx,
+		style,
+		apiKey,
+		probed.baseUrl,
+		[...novelIds, ...overlapIds],
+		probed.infoById,
+		gatewayWide,
+		modelsDev,
+	);
 
-	const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, gatewayWide, modelsDev);
-	await addModelEntriesToProvider(ctx, providerId, picked, infoById);
+	// New models: select to add (esc / no selection = add nothing).
+	let addIds: string[] = [];
+	if (novelIds.length > 0) {
+		const items = novelIds.map((id) => ({ value: id, label: id, description: describeProbeInfo(infoById.get(id) ?? {}) }));
+		addIds = (await pickMany(ctx, `New models for ${providerId}`, items)) ?? [];
+	}
+
+	// Stored models the endpoint no longer lists: select to remove (esc / no
+	// selection = keep them all).
+	const removeIds: string[] = [];
+	if (unsupportedIds.length > 0) {
+		const items = unsupportedIds.map((id) => ({
+			value: id,
+			label: id,
+			description: "stored locally but no longer listed by the endpoint — select to remove",
+		}));
+		removeIds.push(...((await pickMany(ctx, `Unsupported models in ${providerId}`, items)) ?? []));
+	}
+
+	// Already-configured models whose authoritative metadata changed: per model
+	// choose update / keep / delete.
+	const updates = new Map<string, { info: ModelProbeInfo; changes: MetaChange[] }>();
+	for (const id of overlapIds) {
+		const info = infoById.get(id);
+		const stored = storedModels.find((m) => modelIdOf(m) === id);
+		if (!info || !stored) continue;
+		const changes = diffStoredModel(stored, info);
+		if (changes.length === 0) continue;
+		const detail = changes.map((c) => c.label).join(" • ");
+		const action = await selectOne(ctx, `${id} — ${detail}`, [
+			{ value: "update", label: "Update metadata", description: `Apply: ${detail}` },
+			{ value: "keep", label: "Keep current metadata", description: "Leave the stored entry unchanged" },
+			{ value: "delete", label: "Delete this model", description: "Remove it from the provider" },
+		]);
+		if (action === "update") updates.set(id, { info, changes });
+		else if (action === "delete") removeIds.push(id);
+		// "keep" or esc: leave unchanged
+	}
+
+	let touched = 0;
+	if (removeIds.length > 0 || updates.size > 0) {
+		const removeSet = new Set(removeIds);
+		const saved = await mutateProvider(ctx, providerId, (p) => {
+			let models: any[] = Array.isArray(p.models) ? p.models : [];
+			models = models.filter((m) => !removeSet.has(modelIdOf(m)));
+			for (const [id, { info, changes }] of updates) {
+				const index = models.findIndex((m) => modelIdOf(m) === id);
+				if (index === -1) continue;
+				// Strings become objects so the new fields have somewhere to live.
+				if (typeof models[index] === "string") models[index] = { id, input: ["text", "image"] };
+				applyMetaChanges(models[index], info, changes);
+			}
+			p.models = models;
+			return true;
+		});
+		if (saved) {
+			touched += removeIds.length + updates.size;
+			const parts: string[] = [];
+			if (updates.size > 0) parts.push(`updated metadata for ${updates.size}`);
+			if (removeIds.length > 0) parts.push(`removed ${removeIds.length}`);
+			ctx.ui.notify(`Re-probe: ${parts.join(", ")} model${removeIds.length + updates.size === 1 ? "" : "s"} in "${providerId}".`, "info");
+		}
+	}
+	if (addIds.length > 0) {
+		touched += addIds.length;
+		await addModelEntriesToProvider(ctx, providerId, addIds, infoById);
+	}
+	if (touched === 0) {
+		ctx.ui.notify("No changes — everything the endpoint returned is already configured and up to date.", "info");
+	}
 }
 
 async function addModelsToProvider(ctx: CommandContext, providerId: string) {
