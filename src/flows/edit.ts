@@ -9,11 +9,11 @@ import type { TriItem } from "../ui/select.ts";
 import {
 	promptCeilingProviderString,
 	promptContextWindow,
-	promptManualModelOptions,
+	promptManualModels,
 	promptMaxTokens,
-	promptModelIdsOneByOne,
 	promptReasoning,
 	promptImage,
+	describeModelInfoFull,
 } from "../ui/prompts.ts";
 import { buildProbeUrl, slugify } from "../url.ts";
 import {
@@ -652,10 +652,13 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	for (const id of unsupportedIds) {
 		// No probe data for these (the endpoint didn't list them) — show what
 		// the local rules/defaults resolve to, with "unsupported" as a suffix.
+		// describeProbeInfo hides default-valued fields, so fall back to the
+		// full summary to always show the resolved metadata.
+		const resolved = resolveModelInfo(id);
 		items.push({
 			value: id,
 			label: `${id} • unsupported`,
-			description: describeProbeInfo(resolveModelInfo(id)),
+			description: describeProbeInfo(resolved) || describeModelInfoFull(resolved),
 			searchText: `${id} unsupported`,
 			states: ["off", "on"],
 			initial: "on",
@@ -733,10 +736,7 @@ async function addModelsToProvider(ctx: CommandContext, providerId: string) {
 				: provider?.compat
 					? "ollama"
 					: "openai";
-	const ids = await promptModelIdsOneByOne(ctx, style);
-	if (!ids || ids.length === 0) return;
-	// Manually entered ids have no probe data — let the user override the
-	// resolved (local rules + defaults) metadata per model.
-	const overrides = await promptManualModelOptions(ctx, ids);
-	await addModelEntriesToProvider(ctx, providerId, ids, undefined, overrides ?? undefined);
+	const manual = await promptManualModels(ctx, style);
+	if (!manual) return;
+	await addModelEntriesToProvider(ctx, providerId, manual.ids, undefined, manual.options);
 }

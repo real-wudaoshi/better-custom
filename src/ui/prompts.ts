@@ -99,76 +99,89 @@ export async function promptMaxTokens(ctx: CommandContext, current?: number): Pr
 	return parsed;
 }
 
-// After manual id entry: offer per-model metadata customization. Each model
-// shows its resolved metadata (local rules + defaults — manual ids have no
-// probe data); choosing "Set metadata manually" walks reasoning / image /
-// context window with the resolved values as starting points. Returns a map
-// of id -> ModelOptions for customized models only; null on cancel (callers
-// treat that as "no overrides").
-export async function promptManualModelOptions(
-	ctx: CommandContext,
-	ids: string[],
-): Promise<Map<string, ModelOptions> | null> {
-	const overrides = new Map<string, ModelOptions>();
-	for (const id of ids) {
-		const resolved = resolveModelInfo(id);
-		const choice = await selectOne(ctx, `Metadata for ${id}`, [
-			{ value: "auto", label: "Use resolved metadata", description: describeProbeInfo(resolved) || "no known metadata — defaults (text-only, reasoning on)" },
-			{ value: "custom", label: "Set metadata manually", description: "Choose reasoning, image input, and context window" },
-		]);
-		if (choice === null) return null;
-		if (choice !== "custom") continue;
-
-		const reasoning = await promptReasoning(ctx, resolved.reasoning === false ? "off" : "xhigh");
-		if (reasoning === null) return null;
-		const image = await promptImage(ctx, resolved.image ?? false);
-		if (image === null) return null;
-		const contextWindow = await promptContextWindow(ctx, resolved.contextWindow);
-		if (contextWindow === null) return null;
-		overrides.set(id, { reasoning, image, contextWindow: contextWindow > 0 ? contextWindow : undefined });
-	}
-	return overrides;
+// Full metadata summary for display, including fields sitting at their
+// default values (describeProbeInfo hides those). Used where a row must
+// always say something, e.g. unsupported models with no probe data.
+export function describeModelInfoFull(info: {
+	contextWindow?: number;
+	image?: boolean;
+	reasoning?: boolean;
+	inferredFields?: string[];
+	defaultedFields?: string[];
+}): string {
+	const tag = (field: string) =>
+		info.defaultedFields?.includes(field) ? " [default]" : info.inferredFields?.includes(field) ? " [local rules]" : "";
+	const parts: string[] = [];
+	parts.push(info.contextWindow ? `ctx ${info.contextWindow}${tag("contextWindow")}` : "ctx unset");
+	parts.push(`${info.image ? "image" : "text-only"}${tag("image")}`);
+	parts.push(`${info.reasoning ? "reasoning" : "no reasoning"}${tag("reasoning")}`);
+	return parts.join(" • ");
 }
 
-export async function promptModelIdsOneByOne(
+// Manual model entry: type an id, land in that model's metadata menu (each
+// field opens its own prompt and returns to the menu), then the next id.
+// Blank enter or esc on the id prompt exits. Starting values come from
+// resolveModelInfo (local rules + defaults — manual ids have no probe data).
+// Returns the ids plus every model's confirmed options; null when cancelled
+// with nothing entered.
+export async function promptManualModels(
 	ctx: CommandContext,
 	style: ProviderStyle,
-): Promise<string[] | null> {
-	const modelIds: string[] = [];
-	const firstPlaceholder =
+): Promise<{ ids: string[]; options: Map<string, ModelOptions> } | null> {
+	const placeholder =
 		style === "anthropic"
-			? "e.g. claude-sonnet-4-5 (blank to finish)"
+			? "e.g. claude-sonnet-4-5 (blank or esc to finish)"
 			: style === "ollama"
-				? "e.g. llama3.1:8b or qwen2.5-coder:7b (blank to finish)"
+				? "e.g. llama3.1:8b or qwen2.5-coder:7b (blank or esc to finish)"
 				: style === "gemini"
-					? "e.g. gemini-2.5-pro (blank to finish)"
-					: "e.g. gpt-4o-mini or qwen/qwen3-coder (blank to finish)";
-	const nextPlaceholder =
-		style === "anthropic"
-			? "another Anthropic-style model id (blank to finish)"
-			: style === "ollama"
-				? "another Ollama model id (blank to finish)"
-				: style === "gemini"
-					? "another Gemini model id (blank to finish)"
-					: "another OpenAI-style model id (blank to finish)";
+					? "e.g. gemini-2.5-pro (blank or esc to finish)"
+					: "e.g. gpt-4o-mini or qwen/qwen3-coder (blank or esc to finish)";
 
+	const ids: string[] = [];
+	const options = new Map<string, ModelOptions>();
 	while (true) {
-		const value = await ctx.ui.input(modelIds.length === 0 ? "Model id" : "Add another model id", modelIds.length === 0 ? firstPlaceholder : nextPlaceholder);
-		if (value === undefined) return null;
-		const trimmed = value.trim();
-		if (!trimmed) {
-			if (modelIds.length === 0) {
-				ctx.ui.notify("Add at least one model.", "warning");
-				continue;
-			}
-			return modelIds;
-		}
-		if (modelIds.includes(trimmed)) {
-			ctx.ui.notify(`Model already added: ${trimmed}`, "warning");
+		const value = await ctx.ui.input(ids.length === 0 ? "Model id" : "Add another model id", placeholder);
+		if (value === undefined) break; // esc
+		const id = value.trim();
+		if (!id) break; // blank enter exits
+		if (ids.includes(id)) {
+			ctx.ui.notify(`Model already added: ${id}`, "warning");
 			continue;
 		}
-		modelIds.push(trimmed);
+
+		const resolved = resolveModelInfo(id);
+		const opts: ModelOptions = {
+			reasoning: resolved.reasoning === false ? "off" : "xhigh",
+			image: resolved.image ?? false,
+			contextWindow: resolved.contextWindow,
+		};
+		const summary = describeProbeInfo(resolved) || describeModelInfoFull(resolved);
+
+		// Per-model menu: each field opens its own prompt, then comes back here.
+		while (true) {
+			const field = await selectOne(ctx, `${id} — ${summary}`, [
+				{ value: "reasoning", label: "Reasoning", suffix: ` • ${opts.reasoning}`, description: "Set the reasoning ceiling (off → max)" },
+				{ value: "image", label: "Image input", suffix: ` • ${opts.image ? "on" : "off"}`, description: "Toggle image input (text+image vs text-only)" },
+				{ value: "context", label: "Context window", suffix: ` • ${opts.contextWindow ?? "unset"}`, description: "Max context tokens for this model" },
+				{ value: "done", label: "Done", description: "Confirm this model and continue" },
+			]);
+			if (field === null || field === "done") break;
+			if (field === "reasoning") {
+				const v = await promptReasoning(ctx, opts.reasoning);
+				if (v !== null) opts.reasoning = v;
+			} else if (field === "image") {
+				const v = await promptImage(ctx, opts.image);
+				if (v !== null) opts.image = v;
+			} else if (field === "context") {
+				const v = await promptContextWindow(ctx, opts.contextWindow);
+				if (v !== null) opts.contextWindow = v > 0 ? v : undefined;
+			}
+		}
+
+		ids.push(id);
+		options.set(id, opts);
 	}
+	return ids.length > 0 ? { ids, options } : null;
 }
 
 export async function promptProviderStyle(

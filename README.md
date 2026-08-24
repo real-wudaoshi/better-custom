@@ -130,9 +130,10 @@ Custom endpoint:
 - API key method (API key or none)
 - model discovery: auto-detect (probes `/models` plus every known metadata
   source) or manual entry. On failure you can retry or switch to manual
-  entry. Manually entered ids are offered per-model metadata customization
-  (reasoning, image input, context window) with the resolved values as
-  starting points.
+  entry. Manual entry walks one model at a time: type the id, land in its
+  metadata menu (reasoning / image input / context window, each pre-filled
+  from the resolved values), confirm, then enter the next id — blank or esc
+  finishes.
 
 Newly added models resolve every field in four tiers: values detected from
 the gateway win, then the models.dev catalog (exact entries), then the
@@ -166,8 +167,10 @@ Pick a provider, then choose:
   - Max output tokens
   - Headers / endpoint override (per-model `baseUrl` and JSON `headers`)
   - Delete this model
-- Add models manually — type model ids; each one can be customized right away
-  (reasoning, image input, context window) or left at its resolved metadata
+- Add models manually — one model at a time: type the id, adjust its metadata
+  in the per-model menu (reasoning, image input, context window, pre-filled
+  from the resolved values), confirm, then enter the next id; blank or esc
+  finishes
 - Rename provider — change the provider name (key) in the active models config
 - Delete provider — remove the whole provider from the active models config
   (also available as a standalone wizard action)

@@ -117,8 +117,9 @@ pi install /path/to/better-custom
 - provider 名称(必须唯一)
 - API key 方式(API key 或 none)
 - 模型发现:自动探测(`/models` + 所有已知元数据来源)或手动输入。
-  失败后可以重试或改用手动输入。手动输入的模型可以逐个自定义元数据
-  (reasoning、图像输入、上下文窗口),默认值以解析结果为起点
+  失败后可以重试或改用手动输入。手动输入是逐个模型进行的:输入 id 后进入
+  该模型的元数据菜单(reasoning / 图像输入 / 上下文窗口,各项以解析结果为
+  起点),确认后输入下一个 id,留空或 esc 结束
 
 新添加的模型按四层解析每个字段:网关实测优先,其次是 models.dev 目录
 (精确到单个模型),再次是内置已知模型规则,最后是默认值 —— 纯文本输入、
@@ -146,8 +147,9 @@ pi install /path/to/better-custom
   - 最大输出 token
   - Headers / 端点覆盖(模型级 `baseUrl` 和 JSON `headers`)
   - 删除该模型
-- 手动添加模型 —— 输入模型 id;每个模型都可以当场自定义元数据(reasoning、
-  图像输入、上下文窗口),或直接使用解析出的值
+- 手动添加模型 —— 逐个进行:输入 id 后进入该模型的元数据菜单(reasoning、
+  图像输入、上下文窗口,各项以解析结果为起点),确认后输入下一个 id;
+  留空或 esc 结束
 - 重命名 provider —— 修改当前 models 配置中的 provider 名称(键)
 - 删除 provider —— 从当前 models 配置中移除整个 provider(向导主菜单也有
   独立的删除入口)

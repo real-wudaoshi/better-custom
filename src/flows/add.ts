@@ -14,21 +14,12 @@ import { buildProviderConfig } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { ApiKeyMode, CommandContext, ModelOptions, ModelProbeInfo, ModelsConfig, ProviderApi, ProviderStyle } from "../types.ts";
 import { pickMany, selectOne } from "../ui/select.ts";
-import { promptApiKey, promptEndpoint, promptManualModelOptions, promptModelIdsOneByOne, promptProviderId, promptProviderStyle } from "../ui/prompts.ts";
+import { promptApiKey, promptEndpoint, promptManualModels, promptProviderId, promptProviderStyle } from "../ui/prompts.ts";
 import { buildProbeUrl, dedupe, hasExplicitScheme, normalizeEndpoint } from "../url.ts";
 import { collectProbedModelInfo, fetchGatewayWideInfo, findProvidersByEndpoint, persistProvider, probePickerItems } from "./shared.ts";
 
-// Manual model id entry + the per-model metadata customization prompt.
-// Shared by every "add by hand" path so they all offer the same overrides.
-async function promptManualModels(
-	ctx: CommandContext,
-	style: ProviderStyle,
-): Promise<{ ids: string[]; overrides?: Map<string, ModelOptions> } | null> {
-	const ids = await promptModelIdsOneByOne(ctx, style);
-	if (!ids) return null;
-	const overrides = await promptManualModelOptions(ctx, ids);
-	return { ids, overrides: overrides ?? undefined };
-}
+// Manual model entry (id → per-model metadata menu) lives in ui/prompts.ts as
+// promptManualModels; every "add by hand" path below funnels through it.
 
 // Pick a known API provider from the models.dev catalog.
 async function pickCatalogProvider(ctx: CommandContext): Promise<ModelsDevProvider | null> {
@@ -120,7 +111,7 @@ async function addFromCatalog(ctx: CommandContext) {
 		const manual = await promptManualModels(ctx, style);
 		if (!manual) return;
 		ids = manual.ids;
-		overrides = manual.overrides;
+		overrides = manual.options;
 	}
 
 	// No gateway calls on this path — developer-role support stays at the safe
@@ -160,7 +151,7 @@ async function collectModelIds(
 	apiKey: { mode: ApiKeyMode; value?: string },
 	normalizedEndpoint: string,
 	trimmedEndpointInput: string,
-): Promise<{ ids: string[]; infoById?: Map<string, ModelProbeInfo>; baseUrl?: string; overrides?: Map<string, ModelOptions> } | null> {
+): Promise<{ ids: string[]; infoById?: Map<string, ModelProbeInfo>; baseUrl?: string; options?: Map<string, ModelOptions> } | null> {
 	const modelMode = await selectOne(ctx, "Models", ["Auto-detect from the endpoint", "Add manually"]);
 	if (!modelMode) return null;
 	if (modelMode !== "Auto-detect from the endpoint") {
@@ -276,7 +267,7 @@ async function addCustom(ctx: CommandContext) {
 		undefined,
 		collected.infoById,
 		developerRole,
-		collected.overrides,
+		collected.options,
 	);
 	if (!(await persistProvider(ctx, providerId, providerConfig))) return;
 
