@@ -13,7 +13,6 @@ import {
 	promptMaxTokens,
 	promptReasoning,
 	promptImage,
-	describeModelInfoFull,
 } from "../ui/prompts.ts";
 import { buildProbeUrl, slugify } from "../url.ts";
 import {
@@ -651,14 +650,12 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	}
 	for (const id of unsupportedIds) {
 		// No probe data for these (the endpoint didn't list them) — show what
-		// the local rules/defaults resolve to, with "unsupported" as a suffix.
-		// describeProbeInfo hides default-valued fields, so fall back to the
-		// full summary to always show the resolved metadata.
-		const resolved = resolveModelInfo(id);
+		// the local rules resolve to, with "unsupported" as a suffix. Defaults
+		// render nothing, same as everywhere else.
 		items.push({
 			value: id,
 			label: `${id} • unsupported`,
-			description: describeProbeInfo(resolved) || describeModelInfoFull(resolved),
+			description: describeProbeInfo(resolveModelInfo(id)),
 			searchText: `${id} unsupported`,
 			states: ["off", "on"],
 			initial: "on",

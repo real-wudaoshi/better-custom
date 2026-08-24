@@ -99,25 +99,6 @@ export async function promptMaxTokens(ctx: CommandContext, current?: number): Pr
 	return parsed;
 }
 
-// Full metadata summary for display, including fields sitting at their
-// default values (describeProbeInfo hides those). Used where a row must
-// always say something, e.g. unsupported models with no probe data.
-export function describeModelInfoFull(info: {
-	contextWindow?: number;
-	image?: boolean;
-	reasoning?: boolean;
-	inferredFields?: string[];
-	defaultedFields?: string[];
-}): string {
-	const tag = (field: string) =>
-		info.defaultedFields?.includes(field) ? " [default]" : info.inferredFields?.includes(field) ? " [local rules]" : "";
-	const parts: string[] = [];
-	parts.push(info.contextWindow ? `ctx ${info.contextWindow}${tag("contextWindow")}` : "ctx unset");
-	parts.push(`${info.image ? "image" : "text-only"}${tag("image")}`);
-	parts.push(`${info.reasoning ? "reasoning" : "no reasoning"}${tag("reasoning")}`);
-	return parts.join(" • ");
-}
-
 // Manual model entry: type an id, land in that model's metadata menu (each
 // field opens its own prompt and returns to the menu), then the next id.
 // Blank enter or esc on the id prompt exits. Starting values come from
@@ -155,11 +136,11 @@ export async function promptManualModels(
 			image: resolved.image ?? false,
 			contextWindow: resolved.contextWindow,
 		};
-		const summary = describeProbeInfo(resolved) || describeModelInfoFull(resolved);
+		const summary = describeProbeInfo(resolved);
 
 		// Per-model menu: each field opens its own prompt, then comes back here.
 		while (true) {
-			const field = await selectOne(ctx, `${id} — ${summary}`, [
+			const field = await selectOne(ctx, summary ? `${id} — ${summary}` : id, [
 				{ value: "reasoning", label: "Reasoning", suffix: ` • ${opts.reasoning}`, description: "Set the reasoning ceiling (off → max)" },
 				{ value: "image", label: "Image input", suffix: ` • ${opts.image ? "on" : "off"}`, description: "Toggle image input (text+image vs text-only)" },
 				{ value: "context", label: "Context window", suffix: ` • ${opts.contextWindow ?? "unset"}`, description: "Max context tokens for this model" },
