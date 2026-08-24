@@ -155,6 +155,8 @@ Pick a provider, then choose:
   rewrite stored entries
 - API flavor — switch the provider between Chat Completions, the Responses API,
   Anthropic Messages, and Gemini
+- Endpoint — change the provider's `baseUrl` (normalized the same way as at
+  add time)
 - Edit per model — pick a model and edit a single field:
   - Reasoning ceiling (`off` → `max`)
   - Image input (text+image vs text-only)

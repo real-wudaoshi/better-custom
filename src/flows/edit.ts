@@ -14,7 +14,7 @@ import {
 	promptReasoning,
 	promptImage,
 } from "../ui/prompts.ts";
-import { buildProbeUrl, slugify } from "../url.ts";
+import { buildProbeUrl, normalizeEndpoint, slugify } from "../url.ts";
 import {
 	addModelEntriesToProvider,
 	collectProbedModelInfo,
@@ -90,6 +90,7 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 			{ value: "deletemodels", label: "Delete models", description: "Remove multiple models at once" },
 			{ value: "add", label: "Add models manually", description: "Type model ids to add" },
 			{ value: "api", label: "API flavor", suffix: ` • ${typeof provider.api === "string" ? provider.api : "unset"}`, description: "Switch between Chat Completions, Responses, Anthropic Messages, and Gemini" },
+			{ value: "endpoint", label: "Endpoint", suffix: ` • ${typeof provider.baseUrl === "string" ? provider.baseUrl : "unset"}`, description: "Change the provider's baseUrl" },
 			{ value: "rename", label: "Rename provider", description: "Change the provider name in the models config" },
 			{ value: "delete", label: "Delete provider", description: "Remove this provider from the models config" },
 			{ value: "back", label: "Back", description: "Return to the provider list" },
@@ -106,6 +107,8 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 			await addModelsToProvider(ctx, providerId);
 		} else if (action === "api") {
 			await changeProviderApi(ctx, providerId);
+		} else if (action === "endpoint") {
+			await changeProviderEndpoint(ctx, providerId);
 		} else if (action === "delete") {
 			const confirmed = await ctx.ui.confirm("Delete provider?", describeProvider(providerId, provider));
 			if (confirmed && (await removeProvider(ctx, providerId))) return; // provider is gone — back to the list
@@ -149,6 +152,38 @@ async function changeProviderApi(ctx: CommandContext, providerId: string) {
 		return true;
 	});
 	if (saved) ctx.ui.notify(`Changed "${providerId}" to ${choice}.`, "info");
+}
+
+// Change a provider's baseUrl, normalized the same way as at add time.
+async function changeProviderEndpoint(ctx: CommandContext, providerId: string) {
+	let provider: any;
+	try {
+		provider = loadModelsConfig().providers?.[providerId];
+	} catch (error) {
+		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		return;
+	}
+	const current = typeof provider?.baseUrl === "string" ? provider.baseUrl : "";
+	const api = typeof provider?.api === "string" ? (provider.api as ProviderApi) : "openai-completions";
+
+	const input = await ctx.ui.input("Endpoint", current || "e.g. https://api.example.com/v1");
+	if (input === undefined) return;
+	const trimmed = input.trim();
+	if (!trimmed || trimmed === current) return;
+
+	let normalized: string;
+	try {
+		normalized = normalizeEndpoint(trimmed, api);
+	} catch (error) {
+		ctx.ui.notify(`Invalid endpoint: ${error instanceof Error ? error.message : String(error)}`, "error");
+		return;
+	}
+
+	const saved = await mutateProvider(ctx, providerId, (p) => {
+		p.baseUrl = normalized;
+		return true;
+	});
+	if (saved) ctx.ui.notify(`Endpoint for "${providerId}" set to ${normalized}.`, "info");
 }
 
 // Rename a provider's key in the models config, preserving its config and original

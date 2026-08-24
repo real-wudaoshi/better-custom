@@ -136,6 +136,7 @@ pi install /path/to/better-custom
   `image [+]` / `reasoning [-]`;只有权威来源(网关实测或 models.dev)的值
   才会出现在更新建议里,本地规则猜测永远不会改写已存储的配置
 - API flavor —— 在 Chat Completions、Responses API、Anthropic Messages、Gemini 之间切换
+- Endpoint —— 修改 provider 的 `baseUrl`(和添加时一样做规范化)
 - 逐模型编辑 —— 选一个模型,编辑单个字段:
   - Reasoning 上限(`off` → `max`)
   - 图像输入(text+image 或纯文本)
