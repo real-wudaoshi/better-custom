@@ -58,8 +58,7 @@ required.
   completion): endpoints that reject the OpenAI `developer` role (e.g. Kimi's
   subscription endpoint) get `compat.supportsDeveloperRole: false`, so pi
   keeps sending `system` instead of failing with a 400. When the probe is
-  inconclusive it defaults to off, which every endpoint accepts. Tune later
-  via Edit provider → Developer role
+  inconclusive it defaults to off, which every endpoint accepts
 - Image input follows the probe (default off): image-capable models get
   `input: ["text", "image"]`, everything else stays text-only. Video input is
   tracked too and shown as a picker tag, but pi's model config has no video
@@ -154,12 +153,8 @@ Pick a provider, then choose:
   `image [+]` / `reasoning [-]` for booleans — and only authoritative values
   (gateway-detected or models.dev) are offered; local-rule guesses never
   rewrite stored entries
-- Set context window (all models) — apply one `contextWindow` to every model
 - API flavor — switch the provider between Chat Completions, the Responses API,
   Anthropic Messages, and Gemini
-- Developer role — whether the endpoint accepts the OpenAI `developer` role:
-  detect from the API (re-run the probe), force on/off, or fall back to pi's
-  own auto-detection
 - Edit per model — pick a model and edit a single field:
   - Reasoning ceiling (`off` → `max`)
   - Image input (text+image vs text-only)
@@ -167,6 +162,7 @@ Pick a provider, then choose:
   - Max output tokens
   - Headers / endpoint override (per-model `baseUrl` and JSON `headers`)
   - Delete this model
+- Delete models — multi-select several models and remove them at once
 - Add models manually — one model at a time: type the id, adjust its metadata
   in the per-model menu (reasoning, image input, context window, pre-filled
   from the resolved values), confirm, then enter the next id; blank or esc

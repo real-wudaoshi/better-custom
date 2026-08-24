@@ -1,10 +1,10 @@
-import { describeProbeInfo, fetchModelsDevInfoForBaseUrl, probeDeveloperRole, probeModels } from "model-probe";
+import { describeProbeInfo, fetchModelsDevInfoForBaseUrl, probeModels } from "model-probe";
 import { apiKeyFromProvider, resolveApiKeyForProbe } from "../api-key.ts";
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, saveModelsConfig } from "../config.ts";
-import { applyReasoning, buildModelEntry, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
+import { applyReasoning, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { CommandContext, ModelProbeInfo, ModelsConfig, ProbeResult, ProviderApi, ProviderStyle } from "../types.ts";
-import { pickTriState, selectOne } from "../ui/select.ts";
+import { pickMany, pickTriState, selectOne } from "../ui/select.ts";
 import type { TriItem } from "../ui/select.ts";
 import {
 	promptCeilingProviderString,
@@ -86,21 +86,10 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 		const modelCount = Array.isArray(provider.models) ? provider.models.length : 0;
 		const action = await selectOne(ctx, `Edit ${providerId}`, [
 			{ value: "probe", label: "Re-probe for models", description: "Query /models again: add new models, flag vanished ones as unsupported, offer metadata updates" },
-			{ value: "context", label: "Set context window (all models)", description: `Apply one contextWindow to all ${modelCount} model${modelCount === 1 ? "" : "s"}` },
 			{ value: "models", label: "Edit per model", description: `${modelCount} model${modelCount === 1 ? "" : "s"} — reasoning, image input, context, max tokens, headers, delete` },
+			{ value: "deletemodels", label: "Delete models", description: "Remove multiple models at once" },
 			{ value: "add", label: "Add models manually", description: "Type model ids to add" },
 			{ value: "api", label: "API flavor", suffix: ` • ${typeof provider.api === "string" ? provider.api : "unset"}`, description: "Switch between Chat Completions, Responses, Anthropic Messages, and Gemini" },
-			{
-				value: "devrole",
-				label: "Developer role",
-				suffix:
-					provider.compat?.supportsDeveloperRole === true
-						? " • on"
-						: provider.compat?.supportsDeveloperRole === false
-							? " • off"
-							: " • auto",
-				description: "Whether the endpoint accepts the OpenAI developer role (probed automatically on add)",
-			},
 			{ value: "rename", label: "Rename provider", description: "Change the provider name in the models config" },
 			{ value: "delete", label: "Delete provider", description: "Remove this provider from the models config" },
 			{ value: "back", label: "Back", description: "Return to the provider list" },
@@ -111,14 +100,12 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 			await editProviderModels(ctx, providerId);
 		} else if (action === "probe") {
 			await reprobeProvider(ctx, providerId);
-		} else if (action === "context") {
-			await setProviderContextWindow(ctx, providerId);
+		} else if (action === "deletemodels") {
+			await deleteModelsFromProvider(ctx, providerId);
 		} else if (action === "add") {
 			await addModelsToProvider(ctx, providerId);
 		} else if (action === "api") {
 			await changeProviderApi(ctx, providerId);
-		} else if (action === "devrole") {
-			await changeProviderDeveloperRole(ctx, providerId);
 		} else if (action === "delete") {
 			const confirmed = await ctx.ui.confirm("Delete provider?", describeProvider(providerId, provider));
 			if (confirmed && (await removeProvider(ctx, providerId))) return; // provider is gone — back to the list
@@ -162,75 +149,6 @@ async function changeProviderApi(ctx: CommandContext, providerId: string) {
 		return true;
 	});
 	if (saved) ctx.ui.notify(`Changed "${providerId}" to ${choice}.`, "info");
-}
-
-// Set whether pi may send system messages with the OpenAI "developer" role to
-// this endpoint. Probed automatically when a provider is added (one tiny chat
-// completion); this menu re-runs that probe or sets the flag by hand. pi
-// merges the flag over its own auto-detected compat per field.
-async function changeProviderDeveloperRole(ctx: CommandContext, providerId: string) {
-	let provider: any;
-	try {
-		provider = loadModelsConfig().providers?.[providerId];
-	} catch (error) {
-		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
-		return;
-	}
-	const api = typeof provider?.api === "string" ? provider.api : "";
-	if (api !== "openai-completions" && api !== "openai-responses") {
-		ctx.ui.notify("Developer role only applies to OpenAI-style providers.", "warning");
-		return;
-	}
-
-	const current: boolean | undefined =
-		typeof provider?.compat?.supportsDeveloperRole === "boolean" ? provider.compat.supportsDeveloperRole : undefined;
-	const tag = (value: boolean | undefined) => (value === current ? " • current" : undefined);
-	const choice = await selectOne(ctx, `Developer role for ${providerId}`, [
-		{ value: "probe", label: "Detect from the API", description: "Send a tiny chat completion with a developer message and set the flag from the result" },
-		{ value: "on", label: "Supported", suffix: tag(true), description: "pi may send system messages with the developer role" },
-		{ value: "off", label: "Not supported", suffix: tag(false), description: "system messages stay system — safe for every endpoint" },
-		{ value: "auto", label: "Auto (pi default)", suffix: tag(undefined), description: "Remove the override; pi auto-detects from provider id / baseUrl" },
-	]);
-	if (!choice) return;
-
-	let value: boolean | undefined;
-	if (choice === "probe") {
-		const baseUrl = typeof provider?.baseUrl === "string" ? provider.baseUrl : "";
-		const firstModel = Array.isArray(provider?.models) ? provider.models.map(modelIdOf).find(Boolean) : undefined;
-		if (!baseUrl || !firstModel) {
-			ctx.ui.notify("Need a baseUrl and at least one model to probe.", "error");
-			return;
-		}
-		const apiKey = apiKeyFromProvider(provider);
-		ctx.ui.notify(`Probing developer-role support on ${baseUrl} ...`, "info");
-		const probed = await probeDeveloperRole(baseUrl, resolveApiKeyForProbe(apiKey.mode, apiKey.value), firstModel);
-		if (probed === undefined) {
-			ctx.ui.notify("Probe was inconclusive (network, auth, or an unrelated error) — nothing changed.", "warning");
-			return;
-		}
-		value = probed;
-	} else {
-		value = choice === "on" ? true : choice === "off" ? false : undefined;
-	}
-
-	const saved = await mutateProvider(ctx, providerId, (p) => {
-		if (value === undefined) {
-			if (p.compat && typeof p.compat === "object") {
-				delete p.compat.supportsDeveloperRole;
-				if (Object.keys(p.compat).length === 0) delete p.compat;
-			}
-		} else {
-			// Merge over existing compat (e.g. keep an Ollama provider's other flags).
-			p.compat = { ...(p.compat ?? {}), supportsDeveloperRole: value };
-		}
-		return true;
-	});
-	if (saved) {
-		ctx.ui.notify(
-			`Developer role for "${providerId}" set to ${value === undefined ? "auto" : value ? "supported" : "not supported"}.`,
-			"info",
-		);
-	}
 }
 
 // Rename a provider's key in the models config, preserving its config and original
@@ -289,9 +207,9 @@ async function renameProvider(ctx: CommandContext, providerId: string): Promise<
 	return newId;
 }
 
-// Apply a single contextWindow value to every model in the provider, preserving
-// each model's reasoning/image config. A value of 0 clears it from all models.
-async function setProviderContextWindow(ctx: CommandContext, providerId: string) {
+// Remove several models at once: multi-select over the provider's models,
+// confirm, then filter them out of the config.
+async function deleteModelsFromProvider(ctx: CommandContext, providerId: string) {
 	let provider: any;
 	try {
 		provider = loadModelsConfig().providers?.[providerId];
@@ -299,47 +217,26 @@ async function setProviderContextWindow(ctx: CommandContext, providerId: string)
 		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return;
 	}
-	const models = Array.isArray(provider?.models) ? provider.models : [];
-	if (models.length === 0) {
+	const modelItems = providerModelItems(provider);
+	if (modelItems.length === 0) {
 		ctx.ui.notify(`Provider "${providerId}" has no models.`, "warning");
 		return;
 	}
 
-	// Prefill with the shared value if every model already agrees, else blank.
-	const windows = models.map((m: any) => (typeof m?.contextWindow === "number" ? m.contextWindow : undefined));
-	const shared = windows.every((w: number | undefined) => w === windows[0]) ? windows[0] : undefined;
+	const picked = await pickMany(ctx, `Delete models from ${providerId}`, modelItems);
+	if (!picked || picked.length === 0) return;
+	const confirmed = await ctx.ui.confirm(
+		"Delete models?",
+		`Remove ${picked.length} model${picked.length === 1 ? "" : "s"} from "${providerId}":\n${picked.map((id) => `- ${id}`).join("\n")}`,
+	);
+	if (!confirmed) return;
 
-	const result = await promptContextWindow(ctx, shared);
-	if (result === null) return;
-
+	const removeSet = new Set(picked);
 	const saved = await mutateProvider(ctx, providerId, (p) => {
-		const list = Array.isArray(p.models) ? p.models : [];
-		for (const m of list) {
-			const opts = readModelOptions(m);
-			opts.contextWindow = result === 0 ? undefined : result;
-			const ceilingOverrides: Partial<Record<"xhigh" | "max", string>> = {};
-			for (const level of ["xhigh", "max"] as const) {
-				const value = readCeilingString(m, level);
-				if (value) ceilingOverrides[level] = value;
-			}
-			const rebuilt = buildModelEntry(
-				modelIdOf(m),
-				opts,
-				Object.keys(ceilingOverrides).length > 0 ? ceilingOverrides : undefined,
-			);
-			Object.assign(m, rebuilt);
-			if (result === 0) delete m.contextWindow;
-		}
+		p.models = (Array.isArray(p.models) ? p.models : []).filter((m: any) => !removeSet.has(modelIdOf(m)));
 		return true;
 	});
-	if (saved) {
-		ctx.ui.notify(
-			result === 0
-				? `Cleared context window on all ${models.length} model${models.length === 1 ? "" : "s"}.`
-				: `Set context window ${result} on all ${models.length} model${models.length === 1 ? "" : "s"}.`,
-			"info",
-		);
-	}
+	if (saved) ctx.ui.notify(`Deleted ${picked.length} model${picked.length === 1 ? "" : "s"} from "${providerId}".`, "info");
 }
 
 // Pick a model, then a field to edit. Each edit mutates one field in place so

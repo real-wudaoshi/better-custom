@@ -48,8 +48,7 @@ LLM provider——无需手工编辑 `models.json` / `models.yml`。
 - 添加时会自动探测 developer role 支持(一次极小的 chat completion):
   拒绝 OpenAI `developer` 角色的端点(比如 Kimi 订阅端点)会写入
   `compat.supportsDeveloperRole: false`,pi 就会继续发 `system` 而不是
-  报 400。探测结果不确定时默认关闭 —— 所有端点都接受 `system`。之后可通过
-  "编辑 provider → Developer role" 调整
+  报 400。探测结果不确定时默认关闭 —— 所有端点都接受 `system`
 - 图像输入跟随探测结果(默认关闭):支持图像输入的模型写入
   `input: ["text", "image"]`,其余保持纯文本。视频输入也会被探测并作为
   选择器标签展示,但 pi 的模型配置没有 video 字段,所以仅用于展示
@@ -136,10 +135,7 @@ pi install /path/to/better-custom
   内联显示 —— 上下文窗口用 `context 128000 -> 1000000`,布尔字段用
   `image [+]` / `reasoning [-]`;只有权威来源(网关实测或 models.dev)的值
   才会出现在更新建议里,本地规则猜测永远不会改写已存储的配置
-- 设置上下文窗口(全部模型)—— 对所有模型应用同一个 `contextWindow`
 - API flavor —— 在 Chat Completions、Responses API、Anthropic Messages、Gemini 之间切换
-- Developer role —— 端点是否接受 OpenAI 的 `developer` 角色:可以从 API
-  重新探测、手动强制开/关,或回落到 pi 自己的自动检测
 - 逐模型编辑 —— 选一个模型,编辑单个字段:
   - Reasoning 上限(`off` → `max`)
   - 图像输入(text+image 或纯文本)
@@ -147,6 +143,7 @@ pi install /path/to/better-custom
   - 最大输出 token
   - Headers / 端点覆盖(模型级 `baseUrl` 和 JSON `headers`)
   - 删除该模型
+- 删除模型 —— 多选若干模型,一次移除
 - 手动添加模型 —— 逐个进行:输入 id 后进入该模型的元数据菜单(reasoning、
   图像输入、上下文窗口,各项以解析结果为起点),确认后输入下一个 id;
   留空或 esc 结束
