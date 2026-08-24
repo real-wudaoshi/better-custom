@@ -134,7 +134,8 @@ export async function promptManualModels(
 		const opts: ModelOptions = {
 			reasoning: resolved.reasoning === false ? "off" : "xhigh",
 			image: resolved.image ?? false,
-			contextWindow: resolved.contextWindow,
+			// Unknown models get a 256K starting point instead of staying unset.
+			contextWindow: resolved.contextWindow ?? 262144,
 		};
 		const summary = describeProbeInfo(resolved);
 
