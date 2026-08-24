@@ -4,7 +4,8 @@ import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, saveModelsCon
 import { applyReasoning, buildModelEntry, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { CommandContext, ModelProbeInfo, ModelsConfig, ProbeResult, ProviderApi, ProviderStyle } from "../types.ts";
-import { pickMany, selectOne } from "../ui/select.ts";
+import { pickTriState, selectOne } from "../ui/select.ts";
+import type { TriItem } from "../ui/select.ts";
 import {
 	promptCeilingProviderString,
 	promptContextWindow,
@@ -604,67 +605,94 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 		modelsDev,
 	);
 
-	// New models: select to add (esc / no selection = add nothing).
-	let addIds: string[] = [];
-	if (novelIds.length > 0) {
-		const items = novelIds.map((id) => ({ value: id, label: id, description: describeProbeInfo(infoById.get(id) ?? {}) }));
-		addIds = (await pickMany(ctx, `New models for ${providerId}`, items)) ?? [];
-	}
-
-	// Stored models the endpoint no longer lists: select to remove (esc / no
-	// selection = keep them all).
-	const removeIds: string[] = [];
-	if (unsupportedIds.length > 0) {
-		const items = unsupportedIds.map((id) => ({
-			value: id,
-			label: id,
-			description: "stored locally but no longer listed by the endpoint — select to remove",
-		}));
-		removeIds.push(...((await pickMany(ctx, `Unsupported models in ${providerId}`, items)) ?? []));
-	}
-
-	// Already-configured models whose authoritative metadata changed: per model
-	// choose update / keep / delete.
-	const updates = new Map<string, { info: ModelProbeInfo; changes: MetaChange[] }>();
+	// One tri-state list for everything: [x] keep/add with the latest metadata,
+	// [-] keep but don't touch metadata (only for models with changes), [ ]
+	// remove/skip. Models needing a decision come first.
+	const novelSet = new Set(novelIds);
+	const changeById = new Map<string, MetaChange[]>();
 	for (const id of overlapIds) {
 		const info = infoById.get(id);
 		const stored = storedModels.find((m) => modelIdOf(m) === id);
 		if (!info || !stored) continue;
 		const changes = diffStoredModel(stored, info);
-		if (changes.length === 0) continue;
-		const detail = changes.map((c) => c.label).join(" • ");
-		const action = await selectOne(ctx, `${id} — ${detail}`, [
-			{ value: "update", label: "Update metadata", description: `Apply: ${detail}` },
-			{ value: "keep", label: "Keep current metadata", description: "Leave the stored entry unchanged" },
-			{ value: "delete", label: "Delete this model", description: "Remove it from the provider" },
-		]);
-		if (action === "update") updates.set(id, { info, changes });
-		else if (action === "delete") removeIds.push(id);
-		// "keep" or esc: leave unchanged
+		if (changes.length > 0) changeById.set(id, changes);
+	}
+
+	const items: TriItem[] = [];
+	for (const [id, changes] of changeById) {
+		items.push({
+			value: id,
+			label: id,
+			description: changes.map((c) => c.label).join(" • "),
+			searchText: `${id} updated`,
+			states: ["off", "mid", "on"],
+			initial: "mid",
+		});
+	}
+	for (const id of novelIds) {
+		items.push({
+			value: id,
+			label: id,
+			description: describeProbeInfo(infoById.get(id) ?? {}),
+			searchText: `${id} new`,
+			states: ["off", "on"],
+			initial: "off",
+		});
+	}
+	for (const id of unsupportedIds) {
+		items.push({
+			value: id,
+			label: id,
+			description: "unsupported — no longer listed by the endpoint",
+			searchText: `${id} unsupported`,
+			states: ["off", "on"],
+			initial: "on",
+		});
+	}
+	for (const id of storedIds) {
+		if (changeById.has(id) || !probedSet.has(id)) continue;
+		items.push({ value: id, label: id, description: "up to date", states: ["off", "on"], initial: "on" });
+	}
+
+	const picked = await pickTriState(ctx, `Re-probe ${providerId}`, items);
+	if (picked === null) return;
+
+	const addIds: string[] = [];
+	const removeIds: string[] = [];
+	const updateIds: string[] = [];
+	for (const item of items) {
+		const state = picked.get(item.value) ?? item.initial;
+		if (novelSet.has(item.value)) {
+			if (state === "on") addIds.push(item.value);
+			continue;
+		}
+		if (state === "off") removeIds.push(item.value);
+		else if (state === "on" && changeById.has(item.value)) updateIds.push(item.value);
+		// "mid": keep the stored entry unchanged
 	}
 
 	let touched = 0;
-	if (removeIds.length > 0 || updates.size > 0) {
+	if (removeIds.length > 0 || updateIds.length > 0) {
 		const removeSet = new Set(removeIds);
 		const saved = await mutateProvider(ctx, providerId, (p) => {
 			let models: any[] = Array.isArray(p.models) ? p.models : [];
 			models = models.filter((m) => !removeSet.has(modelIdOf(m)));
-			for (const [id, { info, changes }] of updates) {
+			for (const id of updateIds) {
 				const index = models.findIndex((m) => modelIdOf(m) === id);
 				if (index === -1) continue;
 				// Strings become objects so the new fields have somewhere to live.
 				if (typeof models[index] === "string") models[index] = { id, input: ["text", "image"] };
-				applyMetaChanges(models[index], info, changes);
+				applyMetaChanges(models[index], infoById.get(id)!, changeById.get(id)!);
 			}
 			p.models = models;
 			return true;
 		});
 		if (saved) {
-			touched += removeIds.length + updates.size;
+			touched += removeIds.length + updateIds.length;
 			const parts: string[] = [];
-			if (updates.size > 0) parts.push(`updated metadata for ${updates.size}`);
+			if (updateIds.length > 0) parts.push(`updated metadata for ${updateIds.length}`);
 			if (removeIds.length > 0) parts.push(`removed ${removeIds.length}`);
-			ctx.ui.notify(`Re-probe: ${parts.join(", ")} model${removeIds.length + updates.size === 1 ? "" : "s"} in "${providerId}".`, "info");
+			ctx.ui.notify(`Re-probe: ${parts.join(", ")} in "${providerId}".`, "info");
 		}
 	}
 	if (addIds.length > 0) {

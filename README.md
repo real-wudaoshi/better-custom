@@ -142,13 +142,15 @@ provider.
 
 Pick a provider, then choose:
 
-- Re-probe for models — query `/models` again: pick new models to add, flag
-  stored models the endpoint no longer lists as unsupported (select to
-  remove), and for already-configured models whose authoritative metadata
-  changed (gateway-detected or models.dev values only — local-rule guesses
-  never rewrite stored entries) choose per model between updating (`context
-  128000 -> 1000000`, `image [+]`, `reasoning [-]` show what would change),
-  keeping the current metadata, or deleting the model
+- Re-probe for models — query `/models` again and reconcile everything in one
+  tri-state list: new models, already-configured models, and stored models the
+  endpoint no longer lists (flagged `unsupported`). Space cycles each row:
+  `[x]` keep/add with the latest metadata, `[-]` keep but don't touch the
+  metadata (only offered on rows with changes), `[ ]` remove/skip. Metadata
+  diffs show inline — `context 128000 -> 1000000` for the context window,
+  `image [+]` / `reasoning [-]` for booleans — and only authoritative values
+  (gateway-detected or models.dev) are offered; local-rule guesses never
+  rewrite stored entries
 - Set context window (all models) — apply one `contextWindow` to every model
 - API flavor — switch the provider between Chat Completions, the Responses API,
   Anthropic Messages, and Gemini
