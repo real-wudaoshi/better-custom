@@ -12,11 +12,23 @@ import { resolveApiKeyForProbe } from "../api-key.ts";
 import { loadModelsConfig, MODELS_JSON_PATH } from "../config.ts";
 import { buildProviderConfig } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
-import type { ApiKeyMode, CommandContext, ModelProbeInfo, ModelsConfig, ProviderApi, ProviderStyle } from "../types.ts";
+import type { ApiKeyMode, CommandContext, ModelOptions, ModelProbeInfo, ModelsConfig, ProviderApi, ProviderStyle } from "../types.ts";
 import { pickMany, selectOne } from "../ui/select.ts";
-import { promptApiKey, promptEndpoint, promptModelIdsOneByOne, promptProviderId, promptProviderStyle } from "../ui/prompts.ts";
+import { promptApiKey, promptEndpoint, promptManualModelOptions, promptModelIdsOneByOne, promptProviderId, promptProviderStyle } from "../ui/prompts.ts";
 import { buildProbeUrl, dedupe, hasExplicitScheme, normalizeEndpoint } from "../url.ts";
 import { collectProbedModelInfo, fetchGatewayWideInfo, findProvidersByEndpoint, persistProvider, probePickerItems } from "./shared.ts";
+
+// Manual model id entry + the per-model metadata customization prompt.
+// Shared by every "add by hand" path so they all offer the same overrides.
+async function promptManualModels(
+	ctx: CommandContext,
+	style: ProviderStyle,
+): Promise<{ ids: string[]; overrides?: Map<string, ModelOptions> } | null> {
+	const ids = await promptModelIdsOneByOne(ctx, style);
+	if (!ids) return null;
+	const overrides = await promptManualModelOptions(ctx, ids);
+	return { ids, overrides: overrides ?? undefined };
+}
 
 // Pick a known API provider from the models.dev catalog.
 async function pickCatalogProvider(ctx: CommandContext): Promise<ModelsDevProvider | null> {
@@ -97,6 +109,7 @@ async function addFromCatalog(ctx: CommandContext) {
 	const catalog = await fetchModelsDevModels(provider.id);
 	let ids: string[];
 	let infoById: Map<string, ModelProbeInfo> | undefined;
+	let overrides: Map<string, ModelOptions> | undefined;
 	if (catalog.size > 0) {
 		const picked = await pickMany(ctx, "Select models", probePickerItems([...catalog.keys()], new Map(), catalog));
 		if (!picked || picked.length === 0) return;
@@ -104,9 +117,10 @@ async function addFromCatalog(ctx: CommandContext) {
 		infoById = finalizeModelInfo(picked, [], { modelsDev: catalog });
 	} else {
 		ctx.ui.notify(`models.dev lists no models for ${provider.name} — enter ids by hand.`, "warning");
-		const manual = await promptModelIdsOneByOne(ctx, style);
+		const manual = await promptManualModels(ctx, style);
 		if (!manual) return;
-		ids = manual;
+		ids = manual.ids;
+		overrides = manual.overrides;
 	}
 
 	// No gateway calls on this path — developer-role support stays at the safe
@@ -124,6 +138,7 @@ async function addFromCatalog(ctx: CommandContext) {
 		undefined,
 		infoById,
 		undefined,
+		overrides,
 	);
 	if (!(await persistProvider(ctx, providerId, providerConfig))) return;
 
@@ -145,12 +160,11 @@ async function collectModelIds(
 	apiKey: { mode: ApiKeyMode; value?: string },
 	normalizedEndpoint: string,
 	trimmedEndpointInput: string,
-): Promise<{ ids: string[]; infoById?: Map<string, ModelProbeInfo>; baseUrl?: string } | null> {
+): Promise<{ ids: string[]; infoById?: Map<string, ModelProbeInfo>; baseUrl?: string; overrides?: Map<string, ModelOptions> } | null> {
 	const modelMode = await selectOne(ctx, "Models", ["Auto-detect from the endpoint", "Add manually"]);
 	if (!modelMode) return null;
 	if (modelMode !== "Auto-detect from the endpoint") {
-		const ids = await promptModelIdsOneByOne(ctx, style);
-		return ids ? { ids } : null;
+		return promptManualModels(ctx, style);
 	}
 
 	let baseUrl = normalizedEndpoint;
@@ -163,8 +177,8 @@ async function collectModelIds(
 			baseUrl = probed.baseUrl;
 			if (probed.ids.length === 0) {
 				ctx.ui.notify("Probe succeeded but returned no models. Switching to manual entry.", "warning");
-				const ids = await promptModelIdsOneByOne(ctx, style);
-				return ids ? { ids, baseUrl } : null;
+				const manual = await promptManualModels(ctx, style);
+				return manual ? { ...manual, baseUrl } : null;
 			}
 
 			// Gateway-wide metadata (one call per source) — fetch BEFORE the picker so
@@ -198,8 +212,8 @@ async function collectModelIds(
 			]);
 			if (action === "retry") continue;
 			if (action === "manual") {
-				const ids = await promptModelIdsOneByOne(ctx, style);
-				return ids ? { ids, baseUrl } : null;
+				const manual = await promptManualModels(ctx, style);
+				return manual ? { ...manual, baseUrl } : null;
 			}
 			return null;
 		}
@@ -262,6 +276,7 @@ async function addCustom(ctx: CommandContext) {
 		undefined,
 		collected.infoById,
 		developerRole,
+		collected.overrides,
 	);
 	if (!(await persistProvider(ctx, providerId, providerConfig))) return;
 

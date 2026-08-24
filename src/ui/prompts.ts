@@ -1,6 +1,7 @@
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig } from "../config.ts";
+import { describeProbeInfo, resolveModelInfo } from "model-probe";
 import { REASONING_LEVELS } from "../types.ts";
-import type { ApiKeyMode, CommandContext, ProviderApi, ProviderStyle, ReasoningCeiling, SelectItem } from "../types.ts";
+import type { ApiKeyMode, CommandContext, ModelOptions, ProviderApi, ProviderStyle, ReasoningCeiling, SelectItem } from "../types.ts";
 import { normalizeEndpoint, slugify, suggestProviderId } from "../url.ts";
 import { selectOne } from "./select.ts";
 
@@ -96,6 +97,37 @@ export async function promptMaxTokens(ctx: CommandContext, current?: number): Pr
 		return null;
 	}
 	return parsed;
+}
+
+// After manual id entry: offer per-model metadata customization. Each model
+// shows its resolved metadata (local rules + defaults — manual ids have no
+// probe data); choosing "Set metadata manually" walks reasoning / image /
+// context window with the resolved values as starting points. Returns a map
+// of id -> ModelOptions for customized models only; null on cancel (callers
+// treat that as "no overrides").
+export async function promptManualModelOptions(
+	ctx: CommandContext,
+	ids: string[],
+): Promise<Map<string, ModelOptions> | null> {
+	const overrides = new Map<string, ModelOptions>();
+	for (const id of ids) {
+		const resolved = resolveModelInfo(id);
+		const choice = await selectOne(ctx, `Metadata for ${id}`, [
+			{ value: "auto", label: "Use resolved metadata", description: describeProbeInfo(resolved) || "no known metadata — defaults (text-only, reasoning on)" },
+			{ value: "custom", label: "Set metadata manually", description: "Choose reasoning, image input, and context window" },
+		]);
+		if (choice === null) return null;
+		if (choice !== "custom") continue;
+
+		const reasoning = await promptReasoning(ctx, resolved.reasoning === false ? "off" : "xhigh");
+		if (reasoning === null) return null;
+		const image = await promptImage(ctx, resolved.image ?? false);
+		if (image === null) return null;
+		const contextWindow = await promptContextWindow(ctx, resolved.contextWindow);
+		if (contextWindow === null) return null;
+		overrides.set(id, { reasoning, image, contextWindow: contextWindow > 0 ? contextWindow : undefined });
+	}
+	return overrides;
 }
 
 export async function promptModelIdsOneByOne(

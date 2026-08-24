@@ -142,6 +142,10 @@ export function buildProviderConfig(
 	ceilingOverrides?: Partial<Record<"xhigh" | "max", string>>,
 	infoById?: Map<string, ModelProbeInfo>,
 	developerRole?: boolean,
+	// Explicit per-model options from the manual-entry metadata prompts; these
+	// win over the resolved probe/rule values (contextWindow falls back to the
+	// resolved value when the user left it unset).
+	optionOverrides?: Map<string, ModelOptions>,
 ) {
 	const serializedApiKey = serializeApiKey(apiKey.mode, apiKey.value, style);
 	const config: any = {
@@ -153,7 +157,11 @@ export function buildProviderConfig(
 			// the built-in defaults (image off, reasoning on) — including for
 			// manually added models, which have no probe info at all.
 			const info = resolveModelInfo(id, infoById?.get(id));
-			return buildModelEntry(id, modelOptionsFromProbe(info, opts), ceilingOverrides);
+			const override = optionOverrides?.get(id);
+			const modelOpts = override
+				? { ...override, contextWindow: override.contextWindow ?? info.contextWindow }
+				: modelOptionsFromProbe(info, opts);
+			return buildModelEntry(id, modelOpts, ceilingOverrides);
 		}),
 	};
 

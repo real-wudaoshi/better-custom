@@ -193,6 +193,9 @@ export async function addModelEntriesToProvider(
 	providerId: string,
 	ids: string[],
 	infoById?: Map<string, ModelProbeInfo>,
+	// Explicit per-model options from the manual metadata prompts; wins over
+	// the resolved values (contextWindow falls back to resolved when unset).
+	optionOverrides?: Map<string, ModelOptions>,
 ) {
 	const existing = new Set<string>();
 	try {
@@ -218,7 +221,11 @@ export async function addModelEntriesToProvider(
 		for (const id of fresh) {
 			const mergedInfo = resolveModelInfo(id, infoById?.get(id));
 			if (probeInfoSummary(mergedInfo).length > 0) detectedCount++;
-			models.push(buildModelEntry(id, modelOptionsFromProbe(mergedInfo, defaultOpts)));
+			const override = optionOverrides?.get(id);
+			const opts = override
+				? { ...override, contextWindow: override.contextWindow ?? mergedInfo.contextWindow }
+				: modelOptionsFromProbe(mergedInfo, defaultOpts);
+			models.push(buildModelEntry(id, opts));
 		}
 		p.models = models;
 		return true;

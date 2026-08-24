@@ -1,4 +1,4 @@
-import { describeProbeInfo, fetchModelsDevInfoForBaseUrl, probeDeveloperRole, probeModels } from "model-probe";
+import { describeProbeInfo, fetchModelsDevInfoForBaseUrl, probeDeveloperRole, probeModels, resolveModelInfo } from "model-probe";
 import { apiKeyFromProvider, resolveApiKeyForProbe } from "../api-key.ts";
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, saveModelsConfig } from "../config.ts";
 import { applyReasoning, buildModelEntry, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
@@ -9,6 +9,7 @@ import type { TriItem } from "../ui/select.ts";
 import {
 	promptCeilingProviderString,
 	promptContextWindow,
+	promptManualModelOptions,
 	promptMaxTokens,
 	promptModelIdsOneByOne,
 	promptReasoning,
@@ -524,6 +525,15 @@ function applyMetaChanges(entry: any, info: ModelProbeInfo, changes: MetaChange[
 	}
 }
 
+// One-line summary of a stored entry's current config, for the re-probe list.
+function storedModelSummary(model: any): string {
+	const details: string[] = [];
+	if (model?.reasoning === true) details.push(`reasoning:${readModelOptions(model).reasoning}`);
+	if (Array.isArray(model?.input) && model.input.includes("image")) details.push("image");
+	if (typeof model?.contextWindow === "number") details.push(`context ${model.contextWindow}`);
+	return details.length > 0 ? details.join(" • ") : "up to date";
+}
+
 async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	let provider: any;
 	try {
@@ -640,10 +650,12 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 		});
 	}
 	for (const id of unsupportedIds) {
+		// No probe data for these (the endpoint didn't list them) — show what
+		// the local rules/defaults resolve to, with "unsupported" as a suffix.
 		items.push({
 			value: id,
-			label: id,
-			description: "unsupported — no longer listed by the endpoint",
+			label: `${id} • unsupported`,
+			description: describeProbeInfo(resolveModelInfo(id)),
 			searchText: `${id} unsupported`,
 			states: ["off", "on"],
 			initial: "on",
@@ -651,7 +663,8 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	}
 	for (const id of storedIds) {
 		if (changeById.has(id) || !probedSet.has(id)) continue;
-		items.push({ value: id, label: id, description: "up to date", states: ["off", "on"], initial: "on" });
+		const stored = storedModels.find((m) => modelIdOf(m) === id);
+		items.push({ value: id, label: id, description: storedModelSummary(stored), states: ["off", "on"], initial: "on" });
 	}
 
 	const picked = await pickTriState(ctx, `Re-probe ${providerId}`, items);
@@ -722,5 +735,8 @@ async function addModelsToProvider(ctx: CommandContext, providerId: string) {
 					: "openai";
 	const ids = await promptModelIdsOneByOne(ctx, style);
 	if (!ids || ids.length === 0) return;
-	await addModelEntriesToProvider(ctx, providerId, ids);
+	// Manually entered ids have no probe data — let the user override the
+	// resolved (local rules + defaults) metadata per model.
+	const overrides = await promptManualModelOptions(ctx, ids);
+	await addModelEntriesToProvider(ctx, providerId, ids, undefined, overrides ?? undefined);
 }
