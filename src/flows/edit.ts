@@ -1,6 +1,6 @@
 import { describeProbeInfo, fetchModelsDevInfoForBaseUrl, probeModels } from "model-probe";
 import { apiKeyFromProvider, resolveApiKeyForProbe } from "../api-key.ts";
-import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, saveModelsConfig } from "../config.ts";
+import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, renameProviderApiKey, saveModelsConfig } from "../config.ts";
 import { applyReasoning, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { CommandContext, ModelProbeInfo, ModelsConfig, ProbeResult, ProviderApi, ProviderStyle } from "../types.ts";
@@ -236,6 +236,14 @@ async function renameProvider(ctx: CommandContext, providerId: string): Promise<
 	} catch (error) {
 		ctx.ui.notify(`Could not write ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return null;
+	}
+
+	// Carry the auth.json entry over to the new id; best-effort, the rename
+	// itself already succeeded.
+	try {
+		renameProviderApiKey(providerId, newId);
+	} catch (error) {
+		ctx.ui.notify(`Renamed, but the auth.json entry could not be moved: ${error instanceof Error ? error.message : String(error)}`, "warning");
 	}
 
 	ctx.ui.notify(`Renamed "${providerId}" → "${newId}".`, "info");
@@ -484,7 +492,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 		return;
 	}
 
-	const apiKey = apiKeyFromProvider(provider);
+	const apiKey = apiKeyFromProvider(providerId, provider);
 	let probed: ProbeResult;
 	try {
 		ctx.ui.notify(`Probing ${buildProbeUrl(baseUrl)} ...`, "info");

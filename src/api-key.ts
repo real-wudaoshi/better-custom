@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process";
+import { storedApiKey } from "./config.ts";
 import type { ApiKeyMode, ProviderStyle } from "./types.ts";
 
 export function resolveApiKeyForProbe(mode: ApiKeyMode, storedValue?: string): string | undefined {
@@ -28,10 +29,12 @@ export function serializeApiKey(mode: ApiKeyMode, value?: string, style?: Provid
 	return value;
 }
 
-// Resolve a stored provider's apiKey reference back into mode+value so we can
-// reuse it for probing. Anything other than $VAR or !cmd is treated as literal.
-export function apiKeyFromProvider(provider: any): { mode: ApiKeyMode; value?: string } {
-	const raw = typeof provider?.apiKey === "string" ? provider.apiKey : "";
+// Resolve a stored provider's key reference back into mode+value so we can
+// reuse it for probing. Reads auth.json first (pi's official split), falling
+// back to a legacy inline apiKey in the models config. Anything other than
+// $VAR or !cmd is treated as literal.
+export function apiKeyFromProvider(providerId: string, provider: any): { mode: ApiKeyMode; value?: string } {
+	const raw = storedApiKey(providerId, provider) ?? "";
 	if (!raw || raw === "dummy" || raw === "ollama") return { mode: "none" };
 	if (raw.startsWith("!")) return { mode: "shell", value: raw.slice(1) };
 	if (raw.startsWith("$")) return { mode: "env", value: raw.slice(1) };

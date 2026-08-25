@@ -7,8 +7,8 @@ import {
 	probeInfoSummary,
 	resolveModelInfo,
 } from "model-probe";
-import { resolveApiKeyForProbe } from "../api-key.ts";
-import { loadModelsConfig, MODELS_JSON_PATH, saveModelsConfig } from "../config.ts";
+import { resolveApiKeyForProbe, serializeApiKey } from "../api-key.ts";
+import { loadModelsConfig, MODELS_JSON_PATH, removeProviderApiKey, saveModelsConfig, saveProviderApiKey } from "../config.ts";
 import { buildModelEntry, modelIdOf, modelOptionsFromProbe, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { GatewayProbeProfile } from "../presets.ts";
@@ -158,6 +158,13 @@ export async function removeProvider(ctx: CommandContext, providerId: string): P
 		ctx.ui.notify(`Could not write ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return false;
 	}
+	// Drop the auth.json entry along with the provider so no orphan key stays
+	// behind. Best-effort: a failing auth write must not undo the deletion.
+	try {
+		removeProviderApiKey(providerId);
+	} catch (error) {
+		ctx.ui.notify(`Provider deleted, but its auth.json entry could not be removed: ${error instanceof Error ? error.message : String(error)}`, "warning");
+	}
 	ctx.ui.notify(`Deleted provider "${providerId}" from ${MODELS_JSON_PATH}`, "info");
 	return true;
 }
@@ -186,6 +193,29 @@ export async function persistProvider(ctx: CommandContext, providerId: string, p
 		return false;
 	}
 	return true;
+}
+
+// Write a provider's key into auth.json (pi's official credential file, the
+// one /login writes). Call AFTER persistProvider succeeds. No-op where keys
+// stay inline (OMP) or nothing was entered.
+export function persistApiKey(
+	ctx: CommandContext,
+	providerId: string,
+	apiKey: { mode: ApiKeyMode; value?: string },
+	style: ProviderStyle,
+): boolean {
+	const serialized = serializeApiKey(apiKey.mode, apiKey.value, style);
+	if (!serialized) return true;
+	try {
+		saveProviderApiKey(providerId, serialized);
+		return true;
+	} catch (error) {
+		ctx.ui.notify(
+			`Provider saved, but the API key could not be written to auth.json: ${error instanceof Error ? error.message : String(error)}. Run "/login ${providerId}" to set it.`,
+			"warning",
+		);
+		return false;
+	}
 }
 
 export async function addModelEntriesToProvider(

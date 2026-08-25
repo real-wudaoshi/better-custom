@@ -9,13 +9,13 @@ export async function promptApiKey(
 	ctx: CommandContext,
 ): Promise<{ mode: ApiKeyMode; value?: string } | null> {
 	const choice = await selectOne(ctx, "API key", [
-		{ value: "literal", label: "API key", description: "Stored verbatim in the active models config" },
+		{ value: "literal", label: "API key", description: "Stored in auth.json, like pi's own /login credentials" },
 		{ value: "none", label: "None", description: "No key; a placeholder is written so the provider still loads" },
 	]);
 	if (!choice) return null;
 	if (choice === "none") return { mode: "none" };
 
-	const value = await ctx.ui.input("API key", "saved directly in the active models config");
+	const value = await ctx.ui.input("API key", "saved in auth.json under the provider id");
 	if (value === undefined) return null;
 	const trimmed = value.trim();
 	if (!trimmed) return { mode: "none" };

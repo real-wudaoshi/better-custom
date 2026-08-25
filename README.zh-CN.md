@@ -20,10 +20,18 @@ LLM provider——无需手工编辑 `models.json` / `models.yml`。
 - 自动使用当前宿主的 agent 目录
   - Pi:`models.json`
   - OMP:`models.yml` / `models.yaml`
-- API key 方式:
-  - API key(原样写入当前 models 配置)
-  - none(写入占位符,provider 仍可正常加载)
-  - 重新探测时仍会解析已有的 `$ENV` 和 `!command` key
+- API key 的存储方式与 pi 官方一致:
+  - Pi:密钥写入 `~/.pi/agent/auth.json`(即 `/login` 写的那个文件),以
+    provider id 为键(`{"type": "api_key", "key": ...}`);`models.json`
+    里的 provider 不再带 `apiKey` 字段,pi 会按 provider id 自动解析凭证。
+    旧版内联的 `apiKey` 会在下次保存时自动迁移到 `auth.json`。`$ENV` /
+    `!command` 引用在两个文件里都有效。
+  - OMP:密钥保持内联在 `models.yml`(行为不变)。
+  - `none` 模式会写入 `"dummy"` / `"ollama"` 占位符,provider 仍可正常加载。
+  - 删除 provider 会一并删除其 `auth.json` 条目;重命名会同步迁移。
+- 模型声明保留在 `models.json`:pi 只从 `models.json`(或扩展注册)加载
+  自定义 provider;`models-store.json` 仅是 pi 内部给内置 provider 用的
+  目录缓存,单独写入不会被加载,因此不适合存放自定义 provider 的模型。
 - 对 OpenAI 兼容和 Gemini 端点自动探测 `/models`
 - 内置 [models.dev](https://models.dev) provider 目录 —— 直接挑选已知 API
   站点(OpenRouter、DeepSeek、Groq、xAI 等),完全跳过探测:模型列表和

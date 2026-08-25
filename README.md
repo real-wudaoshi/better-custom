@@ -21,10 +21,21 @@ required.
 - Uses the running host's agent directory automatically
   - Pi: `models.json`
   - OMP: `models.yml` / `models.yaml`
-- API key modes:
-  - API key (stored verbatim in the active models config)
-  - none (writes a placeholder so the provider still loads)
-  - existing `$ENV` and `!command` keys are still resolved when re-probing
+- API keys are stored the way pi itself stores them:
+  - Pi: the key goes to `~/.pi/agent/auth.json` under the provider id
+    (`{"type": "api_key", "key": ...}`) — the same file `/login` writes — and
+    the provider in `models.json` carries no `apiKey` field. pi resolves the
+    credential by provider id automatically. Legacy inline `apiKey` entries are
+    migrated to `auth.json` on the next save. `$ENV` / `!command` references
+    work in both files.
+  - OMP: the key stays inline in `models.yml` (unchanged behavior).
+  - `none` mode writes a `"dummy"` / `"ollama"` placeholder so the provider
+    still loads.
+  - Deleting a provider also removes its `auth.json` entry; renaming moves it.
+- Model declarations stay in `models.json`: pi only loads custom providers from
+  `models.json` (or extension registration); `models-store.json` is pi's
+  internal catalog cache for built-in providers and is never loaded on its own,
+  so it is not a place to keep custom models.
 - Auto-probe `/models` for OpenAI-compatible and Gemini endpoints
 - Provider catalog from [models.dev](https://models.dev) — pick a known API
   site (OpenRouter, DeepSeek, Groq, xAI, ...) and skip probing entirely: the

@@ -16,7 +16,7 @@ import type { ApiKeyMode, CommandContext, ModelOptions, ModelProbeInfo, ModelsCo
 import { pickMany, selectOne } from "../ui/select.ts";
 import { promptApiKey, promptEndpoint, promptManualModels, promptProviderId, promptProviderStyle } from "../ui/prompts.ts";
 import { buildProbeUrl, dedupe, hasExplicitScheme, normalizeEndpoint } from "../url.ts";
-import { collectProbedModelInfo, fetchGatewayWideInfo, findProvidersByEndpoint, persistProvider, probePickerItems } from "./shared.ts";
+import { collectProbedModelInfo, fetchGatewayWideInfo, findProvidersByEndpoint, persistApiKey, persistProvider, probePickerItems } from "./shared.ts";
 
 // Manual model entry (id → per-model metadata menu) lives in ui/prompts.ts as
 // promptManualModels; every "add by hand" path below funnels through it.
@@ -93,7 +93,7 @@ async function addFromCatalog(ctx: CommandContext) {
 	const apiKey = await promptApiKey(ctx);
 	if (!apiKey) return;
 	if (apiKey.mode === "none") {
-		ctx.ui.notify('No API key selected. Using "dummy" automatically in the models config.', "info");
+		ctx.ui.notify('No API key selected. Using "dummy" automatically in auth.json.', "info");
 	}
 
 	ctx.ui.notify(`Fetching the model list for ${provider.name} from models.dev ...`, "info");
@@ -132,6 +132,7 @@ async function addFromCatalog(ctx: CommandContext) {
 		overrides,
 	);
 	if (!(await persistProvider(ctx, providerId, providerConfig))) return;
+	persistApiKey(ctx, providerId, apiKey, style);
 
 	const withMeta = infoById ? ids.filter((id) => probeInfoSummary(infoById.get(id) ?? {}).length > 0).length : 0;
 	ctx.ui.notify(
@@ -228,8 +229,8 @@ async function addCustom(ctx: CommandContext) {
 	if (apiKey.mode === "none") {
 		ctx.ui.notify(
 			style === "ollama"
-				? 'No API key selected. Using "ollama" automatically in the models config.'
-				: 'No API key selected. Using "dummy" automatically in the models config.',
+				? 'No API key selected. Using "ollama" automatically in auth.json.'
+				: 'No API key selected. Using "dummy" automatically in auth.json.',
 			"info",
 		);
 	}
@@ -270,6 +271,7 @@ async function addCustom(ctx: CommandContext) {
 		collected.options,
 	);
 	if (!(await persistProvider(ctx, providerId, providerConfig))) return;
+	persistApiKey(ctx, providerId, apiKey, style);
 
 	const infoById = collected.infoById;
 	const probedCount = infoById
