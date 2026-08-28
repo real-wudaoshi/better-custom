@@ -130,12 +130,21 @@ export async function promptManualModels(
 			continue;
 		}
 
-		const resolved = resolveModelInfo(id);
+		const api: ProviderApi =
+			style === "anthropic"
+				? "anthropic-messages"
+				: style === "gemini"
+					? "google-generative-ai"
+					: style === "openai-responses"
+						? "openai-responses"
+						: "openai-completions";
+		const resolved = resolveModelInfo(id, undefined, undefined, api);
 		const opts: ModelOptions = {
 			reasoning: resolved.reasoning === false ? "off" : "xhigh",
 			image: resolved.image ?? false,
 			// Unknown models get a 256K starting point instead of staying unset.
 			contextWindow: resolved.contextWindow ?? 262144,
+			maxTokens: resolved.maxTokens,
 		};
 		const summary = describeProbeInfo(resolved);
 
@@ -145,6 +154,7 @@ export async function promptManualModels(
 				{ value: "reasoning", label: "Reasoning", suffix: ` • ${opts.reasoning}`, description: "Set the reasoning ceiling (off → max)" },
 				{ value: "image", label: "Image input", suffix: ` • ${opts.image ? "on" : "off"}`, description: "Toggle image input (text+image vs text-only)" },
 				{ value: "context", label: "Context window", suffix: ` • ${opts.contextWindow ?? "unset"}`, description: "Max context tokens for this model" },
+				{ value: "maxtokens", label: "Max output tokens", suffix: ` • ${opts.maxTokens ?? "unset"}`, description: "Max tokens this model may generate" },
 				{ value: "done", label: "Done", description: "Confirm this model and continue" },
 			]);
 			if (field === null || field === "done") break;
@@ -157,6 +167,9 @@ export async function promptManualModels(
 			} else if (field === "context") {
 				const v = await promptContextWindow(ctx, opts.contextWindow);
 				if (v !== null) opts.contextWindow = v > 0 ? v : undefined;
+			} else if (field === "maxtokens") {
+				const v = await promptMaxTokens(ctx, opts.maxTokens);
+				if (v !== null) opts.maxTokens = v > 0 ? v : undefined;
 			}
 		}
 

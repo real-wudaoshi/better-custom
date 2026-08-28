@@ -427,14 +427,16 @@ async function editModelOverride(ctx: CommandContext, providerId: string, modelI
 
 // Fields where a fresh probe may override the stored config. Only values
 // detected from the gateway or the models.dev catalog count as authoritative
-// — local-rule guesses and built-in defaults never rewrite an existing entry.
-const DIFFABLE_FIELDS = ["contextWindow", "image", "reasoning"] as const;
+// — local-rule guesses, api-fallback and built-in defaults never rewrite an
+// existing entry.
+const DIFFABLE_FIELDS = ["contextWindow", "maxTokens", "image", "reasoning"] as const;
 type DiffableField = (typeof DIFFABLE_FIELDS)[number];
 type MetaChange = { field: DiffableField; label: string };
 
 // Compare a stored model entry against freshly resolved probe info. Returns
-// the authoritative differences, rendered as `context 128000 -> 1000000` for
-// the context window and `image [+]` / `reasoning [-]` for boolean fields.
+// the authoritative differences, rendered as `context 128000 -> 1000000` /
+// `max-out 8192 -> 32000` for numeric fields and `image [+]` / `reasoning [-]`
+// for boolean fields.
 function diffStoredModel(model: any, info: ModelProbeInfo): MetaChange[] {
 	const guessed = new Set<string>([...(info.inferredFields ?? []), ...(info.defaultedFields ?? [])]);
 	const changes: MetaChange[] = [];
@@ -444,6 +446,9 @@ function diffStoredModel(model: any, info: ModelProbeInfo): MetaChange[] {
 		if (field === "contextWindow") {
 			const old = typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
 			if (old !== value) changes.push({ field, label: `context ${old ?? "unset"} -> ${value}` });
+		} else if (field === "maxTokens") {
+			const old = typeof model?.maxTokens === "number" ? model.maxTokens : undefined;
+			if (old !== value) changes.push({ field, label: `max-out ${old ?? "unset"} -> ${value}` });
 		} else if (field === "image") {
 			const old = Array.isArray(model?.input) ? model.input.includes("image") : true;
 			if (old !== value) changes.push({ field, label: `image [${value ? "+" : "-"}]` });
@@ -459,6 +464,7 @@ function diffStoredModel(model: any, info: ModelProbeInfo): MetaChange[] {
 function applyMetaChanges(entry: any, info: ModelProbeInfo, changes: MetaChange[]) {
 	for (const change of changes) {
 		if (change.field === "contextWindow") entry.contextWindow = info.contextWindow;
+		else if (change.field === "maxTokens") entry.maxTokens = info.maxTokens;
 		else if (change.field === "image") entry.input = info.image ? ["text", "image"] : ["text"];
 		else applyReasoning(entry, info.reasoning ? "xhigh" : "off");
 	}
@@ -470,6 +476,7 @@ function storedModelSummary(model: any): string {
 	if (model?.reasoning === true) details.push(`reasoning:${readModelOptions(model).reasoning}`);
 	if (Array.isArray(model?.input) && model.input.includes("image")) details.push("image");
 	if (typeof model?.contextWindow === "number") details.push(`context ${model.contextWindow}`);
+	if (typeof model?.maxTokens === "number") details.push(`max-out ${model.maxTokens}`);
 	return details.length > 0 ? details.join(" • ") : "up to date";
 }
 
@@ -529,7 +536,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	const profile = AUTO_PROBE_PROFILE;
 	let gatewayWide: Map<string, ModelProbeInfo> | undefined;
 	if (style !== "ollama") {
-		ctx.ui.notify("Fetching model metadata (context, image/video, reasoning) ...", "info");
+		ctx.ui.notify("Fetching model metadata (context, max-out, image/video, reasoning) ...", "info");
 		gatewayWide = await fetchGatewayWideInfo(style, apiKey, probed.baseUrl, profile);
 		if (gatewayWide.size > 0) {
 			for (const [id, info] of gatewayWide) {
@@ -552,6 +559,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 		probed.infoById,
 		gatewayWide,
 		modelsDev,
+		api,
 	);
 
 	// One tri-state list for everything: [x] keep/add with the latest metadata,

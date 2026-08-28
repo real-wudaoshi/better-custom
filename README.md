@@ -2,322 +2,146 @@
 
 [中文文档](README.zh-CN.md)
 
-A better way to add custom providers for Pi and Oh My Pi (OMP).
+A better way to manage custom providers for Pi and Oh My Pi (OMP).
 
-An interactive wizard that adds, edits, and deletes custom LLM providers in the
-running host's models config — no hand-editing of `models.json` / `models.yml`
-required.
+An interactive wizard (`/custom-provider`) that adds, edits, and deletes custom
+LLM providers — no hand-editing of config files required.
 
 ## Features
 
-- Add, edit, or delete custom providers from an interactive wizard
-- Supported provider styles:
-  - OpenAI-compatible endpoints — Chat Completions (`openai-completions`)
-  - OpenAI Responses API (`openai-responses`) — the newer `/responses` endpoint
-  - Anthropic-compatible endpoints
-  - Gemini endpoints (`google-generative-ai`) — native Gemini format; the
-    baseUrl includes the version path (e.g. `https://generativelanguage.googleapis.com/v1beta`)
-  - Ollama-compatible endpoints
-- Uses the running host's agent directory automatically
-  - Pi: `models.json`
-  - OMP: `models.yml` / `models.yaml`
-- API keys are stored the way pi itself stores them:
-  - Pi: the key goes to `~/.pi/agent/auth.json` under the provider id
-    (`{"type": "api_key", "key": ...}`) — the same file `/login` writes — and
-    the provider in `models.json` carries no `apiKey` field. pi resolves the
-    credential by provider id automatically. Legacy inline `apiKey` entries are
-    migrated to `auth.json` on the next save. `$ENV` / `!command` references
-    work in both files.
-  - OMP: the key stays inline in `models.yml` (unchanged behavior).
-  - `none` mode writes a `"dummy"` / `"ollama"` placeholder so the provider
-    still loads.
-  - Deleting a provider also removes its `auth.json` entry; renaming moves it.
-- Model declarations stay in `models.json`: pi only loads custom providers from
-  `models.json` (or extension registration); `models-store.json` is pi's
-  internal catalog cache for built-in providers and is never loaded on its own,
-  so it is not a place to keep custom models.
-- Auto-probe `/models` for OpenAI-compatible and Gemini endpoints
-- Provider catalog from [models.dev](https://models.dev) — pick a known API
-  site (OpenRouter, DeepSeek, Groq, xAI, ...) and skip probing entirely: the
-  model list and metadata come straight from the catalog (via the official
-  SDK, with a jsDelivr freshness layer and a bundled offline snapshot)
-- Custom endpoints are probed with a single auto-detect profile — every known
-  metadata source is tried automatically. The probe is path-adaptive: if
-  `/models` doesn't answer on the given base, the variant with `/v1` added or
-  removed is tried automatically (some gateways, e.g. USTC's LiteLLM, hang on
-  `/v1/models` while serving `/models` at the root), and non-local `http://`
-  URLs fall back to `https://`. On failure you can retry or switch to manual
-  entry.
-- Auto-detects model metadata while probing:
-  - context window, max output tokens, image/video input, and reasoning support/levels
-  - sources: OpenAI `GET /models/{id}` (incl. `capabilities.reasoning.effort_options`),
-    inline `/models` list metadata (OpenRouter etc.), LiteLLM proxy
-    `GET /model/info` (one call covers every model), One API / New API
-    `meta` fields + `supported_endpoint_types`, Gemini's native
-    `/v1beta/models` (`inputTokenLimit`), and Ollama's native
-    `/api/tags` + `/api/show`
-  - every field is resolved in four tiers — detected from the gateway, then
-    the models.dev catalog (tagged `[models.dev]`, exact per-model entries),
-    then the built-in known-model rules (tagged `[local rules]`), then the
-    defaults (`image: false`, `video: false`, `reasoning: true`); detected values are
-    written into the model entries
-- Multi-select model picker for probed models, showing metadata inline — only
-  values that differ from the defaults are shown (e.g. a model probed as
-  text-only gets no tag)
-- Unique provider names — the wizard refuses to overwrite an existing provider
-- Developer-role support is probed automatically on add (one tiny chat
-  completion): endpoints that reject the OpenAI `developer` role (e.g. Kimi's
-  subscription endpoint) get `compat.supportsDeveloperRole: false`, so pi
-  keeps sending `system` instead of failing with a 400. When the probe is
-  inconclusive it defaults to off, which every endpoint accepts
-- Image input follows the probe (default off): image-capable models get
-  `input: ["text", "image"]`, everything else stays text-only. Video input is
-  tracked too and shown as a picker tag, but pi's model config has no video
-  slot, so it is display-only
-- Reasoning enabled by default at the `xhigh` ceiling for newly added models
-- Safe delete flow for whole providers or individual models
+- **Add from the [models.dev](https://models.dev) catalog** — pick a known API
+  site (OpenRouter, DeepSeek, Groq, xAI, ...); base URL, model list, and
+  metadata all come from the catalog (official SDK, with a jsDelivr freshness
+  layer and a bundled offline snapshot). No probing at all.
+- **Add any custom endpoint** — OpenAI Chat Completions, OpenAI Responses,
+  Anthropic Messages, Gemini, or Ollama. Auto-detect probes `/models` and every
+  known metadata source, or enter models by hand (one id at a time, with a
+  per-model metadata menu pre-filled from the resolved values).
+- **Automatic metadata detection** — context window, max output tokens,
+  image/video input, reasoning support and levels, learned from the gateway
+  itself (LiteLLM `/model/info` + `/model_group/info`, site public catalogs,
+  OpenAI `GET /models/{id}`, inline list metadata, Ollama native API) and from
+  models.dev. See [How metadata is resolved](#how-metadata-is-resolved).
+- **Re-probe to reconcile** — query `/models` again and review everything in
+  one tri-state list: new models, metadata updates (`context 128000 ->
+  1000000`, `image [+]`, `max-out 8192 -> 32000`), and vanished models flagged
+  `unsupported`. `[x]` apply, `[-]` keep stored metadata, `[ ]` remove/skip.
+- **Edit everything afterwards** — per-model fields (reasoning ceiling, image
+  input, context window, max output tokens, headers/endpoint override), bulk
+  model delete, provider API flavor, endpoint, rename, delete.
+- **Sensible, honest defaults** — detected values win; guesses are tagged
+  (`[models.dev]` / `[local rules]`) in the picker; default-filled values are
+  not shown at all. Degenerate catalog limits (`maxTokens == contextWindow`)
+  are clamped automatically.
+- **Developer-role probe** — endpoints that reject the OpenAI `developer` role
+  (e.g. Kimi's subscription endpoint) get `compat.supportsDeveloperRole: false`
+  automatically, so pi keeps sending `system` instead of failing with a 400.
+- **Official-style storage** — API keys go to `~/.pi/agent/auth.json` (the same
+  file `/login` writes), model declarations to `models.json`. Legacy inline
+  `apiKey` entries migrate automatically. See [Storage](#storage).
+- **Reasoning levels done right** — when the probe learns the provider's exact
+  effort options, the wizard writes a matching `thinkingLevelMap`; new models
+  default to reasoning on at the `xhigh` ceiling.
+- **Path-adaptive probing** — if `/models` doesn't answer on the given base,
+  the `/v1` variant is tried automatically; non-local `http://` falls back to
+  `https://`. On failure you can retry or switch to manual entry.
 
 ## Install
 
-From npm:
-
 ```bash
-pi install npm:better-custom-provider
+pi install npm:better-custom-provider        # from npm
+pi install https://github.com/real-wudaoshi/better-custom   # from GitHub
+pi install /path/to/better-custom            # from a local checkout
 ```
 
-From GitHub:
-
-```bash
-pi install https://github.com/real-wudaoshi/better-custom
-```
-
-From a local checkout:
-
-```bash
-pi install /path/to/better-custom
-```
-
-> Prefer `pi install` over copying the folder into `~/.pi/agent/extensions/`
-> manually: `pi install` runs `npm install`, so the `yaml` runtime dependency
-> (used for OMP's `models.yml`) is installed automatically. A manual copy still
-> works — the extension loads without `yaml` and falls back to JSON, which is a
-> valid YAML subset (see [Configuration](#configuration)).
+Prefer `pi install` over copying the folder into `~/.pi/agent/extensions/`
+manually: `pi install` runs `npm install`, so the runtime dependencies
+(`model-probe`, `yaml`) are present. A manual copy still starts, but YAML
+configs degrade to JSON (a valid YAML subset).
 
 ## Usage
 
-After installing, reload pi if needed, then run:
+Run `/custom-provider` in pi, then choose **Add provider**, **Edit provider**,
+or **Delete provider**.
 
-```text
-/custom-provider
-```
+### Add
 
-The wizard offers three actions:
+1. **From models.dev catalog** — pick a provider, name it, enter the API key
+   (or none), multi-select models. Metadata comes from the catalog.
+2. **Custom endpoint** — pick the provider style, enter the endpoint URL, name
+   it, enter the API key, then:
+   - **Auto-detect from the endpoint** — probe `/models` + metadata sources,
+     multi-select models with metadata shown inline; or
+   - **Add manually** — type an id, adjust its metadata menu (reasoning / image
+     / context window / max output), confirm, next id; blank or esc finishes.
 
-1. Add a provider
-2. Edit a provider
-3. Delete a provider
+### Edit
 
-### Add a provider
+Pick a provider, then: **Re-probe for models** (reconcile as above),
+**Edit per model**, **Delete models**, **Add models manually**, **API flavor**,
+**Endpoint**, **Rename provider**, or **Delete provider**.
 
-First choice: **From models.dev catalog** or **Custom endpoint**.
-
-From the [models.dev](https://models.dev) catalog (via the official SDK):
-
-- pick a known API provider (OpenRouter, DeepSeek, Groq, xAI, ...) — its base
-  URL, env var names, and full model list come from the catalog
-- provider name (defaults to the catalog id, must be unique)
-- API key method (API key or none)
-- multi-select model picker with catalog metadata inline — no probing at all;
-  when models.dev is unreachable, a jsDelivr-served fresh snapshot and the
-  SDK's bundled snapshot keep this path working
-
-Custom endpoint:
-
-- provider style (OpenAI Chat Completions / OpenAI Responses / Anthropic /
-  Gemini / Ollama)
-- endpoint URL
-- provider name (must be unique)
-- API key method (API key or none)
-- model discovery: auto-detect (probes `/models` plus every known metadata
-  source) or manual entry. On failure you can retry or switch to manual
-  entry. Manual entry walks one model at a time: type the id, land in its
-  metadata menu (reasoning / image input / context window, each pre-filled
-  from the resolved values), confirm, then enter the next id — blank or esc
-  finishes.
-
-Newly added models resolve every field in four tiers: values detected from
-the gateway win, then the models.dev catalog (exact entries), then the
-built-in known-model rules, then the defaults — text-only input and
-`reasoning: true` at the `xhigh` ceiling. Tune any of this later via Edit
-provider.
-
-### Edit a provider
-
-Pick a provider, then choose:
-
-- Re-probe for models — query `/models` again and reconcile everything in one
-  tri-state list: new models, already-configured models, and stored models the
-  endpoint no longer lists (flagged `unsupported`). Space cycles each row:
-  `[x]` keep/add with the latest metadata, `[-]` keep but don't touch the
-  metadata (only offered on rows with changes), `[ ]` remove/skip. Metadata
-  diffs show inline — `context 128000 -> 1000000` for the context window,
-  `image [+]` / `reasoning [-]` for booleans — and only authoritative values
-  (gateway-detected or models.dev) are offered; local-rule guesses never
-  rewrite stored entries
-- API flavor — switch the provider between Chat Completions, the Responses API,
-  Anthropic Messages, and Gemini
-- Endpoint — change the provider's `baseUrl` (normalized the same way as at
-  add time)
-- Edit per model — pick a model and edit a single field:
-  - Reasoning ceiling (`off` → `max`)
-  - Image input (text+image vs text-only)
-  - Context window
-  - Max output tokens
-  - Headers / endpoint override (per-model `baseUrl` and JSON `headers`)
-  - Delete this model
-- Delete models — multi-select several models and remove them at once
-- Add models manually — one model at a time: type the id, adjust its metadata
-  in the per-model menu (reasoning, image input, context window, pre-filled
-  from the resolved values), confirm, then enter the next id; blank or esc
-  finishes
-- Rename provider — change the provider name (key) in the active models config
-- Delete provider — remove the whole provider from the active models config
-  (also available as a standalone wizard action)
-
-Per-model edits change one field in place, so untouched fields (cost, headers,
+Per-model edits change one field in place — untouched fields (cost, headers,
 overrides) are preserved.
 
-### Delete a provider
+## How metadata is resolved
 
-Lists configured providers and removes the selected one after confirmation.
+Every field is resolved in tiers, highest priority first:
 
-## How reasoning maps to pi
+1. **Detected** — real data from the gateway: LiteLLM `/model/info` and
+   `/model_group/info`, USTC-style `GET {site}/api/models/public` (no auth),
+   OpenAI `GET /models/{id}` (incl. `capabilities.reasoning.effort_options`),
+   inline `/models` list metadata (OpenRouter, One API / New API `meta` fields
+   and `supported_endpoint_types`), Gemini `inputTokenLimit`, Ollama
+   `/api/tags` + `/api/show`.
+2. **models.dev** — exact per-model catalog entries, tagged `[models.dev]`.
+3. **Local rules** — a built-in known-model table (OpenAI, Anthropic, DeepSeek,
+   Qwen, Kimi, GLM, Gemini, ...), tagged `[local rules]`. Ids are normalized
+   first, so relay-decorated ids (`bailian/deepseek-v4-pro`, `gpt-5@20250807`,
+   `claude-sonnet-4-6[1m]`) still match. Extend it via
+   `~/.model-probe-rules.json` (see
+   [model-probe](https://github.com/real-wudaoshi/model-probe#custom-rules)).
+4. **API fallback** — protocol-level limits (anthropic 200K/32K, google 1M/64K,
+   openai 258K/32K) when nothing else knows them.
+5. **Defaults** — `image: false`, `video: false`, `reasoning: true`.
 
-pi exposes seven thinking levels: `off, minimal, low, medium, high, xhigh, max`.
-When a model has `reasoning: true`, pi treats `minimal` through `high` as
-available. `xhigh` and `max` are opt-in and only unlocked when explicitly
-mapped, and any level set to `null` is removed. The wizard writes a
-`thinkingLevelMap` to unlock `xhigh`/`max` or to cap reasoning below `high`.
+Only tiers 1–2 ever rewrite an existing entry during re-probe; guesses and
+defaults are starting points for new models. Video input is tracked and shown
+as a picker tag, but pi's model config has no video slot, so it is
+display-only.
 
-## Auto-detected model metadata
+## Storage
 
-When probing `/models` (new provider or re-probe), the wizard tries to learn
-real per-model values before writing the config:
+Pi (official split, same as `/login`):
 
-| Source | What it provides |
-|--------|------------------|
-| OpenAI `GET /models/{id}` | `context_window`, `max_output_tokens`, `capabilities.vision`, `capabilities.reasoning` (type + `effort_options`) |
-| Inline `/models` list entries | OpenRouter (`context_length`, `reasoning`, `architecture.input_modalities`), OpenModels/Epithre-style fields, LiteLLM `max_input_tokens`/`max_output_tokens` |
-| LiteLLM `GET /model/info` | One call returns `model_info` for every model: `context_window`, `max_tokens`/`max_output_tokens`, `supports_vision`, `supports_reasoning` — tried at the baseUrl's origin first (`/v1/model/info` is 404 on LiteLLM), then under the base URL |
-| Site catalog `GET {site}/api/models/public` | No-auth authoritative `context_window` (plus capability flags when published) for every published model (USTC-style sites; `api.` → `llm.` host fallback) — overrides LiteLLM-reported values |
-| LiteLLM `GET /model_group/info` | Server-root endpoint (requires api key) with per-`model_group` capabilities: `max_input_tokens`, `supports_reasoning`, `supports_vision` — tried at the baseUrl's origin first (`/v1/model_group/info` is 404) |
-| One API / New API | `supported_endpoint_types` (chat/embeddings/…) shown in the picker; fork/`meta` fields (`context_window`, `max_tokens`, `capabilities.vision`/`reasoning`, `supports_vision`/`supports_reasoning`) parsed from list entries and `GET /models/{id}` |
-| Ollama `/api/tags` + `/api/show` | `vision` capability (mapped to image input), `model_info` context length (`.context_length` keys) |
+- `~/.pi/agent/auth.json` — credentials, keyed by provider id
+  (`{"type": "api_key", "key": ...}`); `$ENV` / `!command` references work.
+  pi resolves them for any provider id automatically. Selecting "none" writes
+  a `"dummy"` / `"ollama"` placeholder so the provider still loads.
+- `~/.pi/agent/models.json` — provider declarations (baseUrl, api, compat,
+  models). pi only loads custom providers from `models.json`;
+  `models-store.json` is pi's internal catalog cache for built-in providers
+  and is not a place for custom models.
+- Legacy inline `apiKey` entries migrate to `auth.json` on the next save;
+  deleting a provider removes its `auth.json` entry, renaming moves it.
 
-LiteLLM proxies are detected automatically: the wizard calls `GET /model/info`
-first (a single request covering all models — at the server root, then under
-the base URL), then `GET /model_group/info` at the server root when an api key
-is available, then the site's no-auth public catalog
-`GET {site}/api/models/public` (whose `context_window` values override
-LiteLLM's — they are often more complete and accurate), and only falls back to
-per-model `GET /models/{id}` fetches when none of those are available.
-
-Note on One API / New API: the stock gateways return model ids only, so context
-windows can't be discovered from them alone. If your deployment (or a fork)
-exposes `meta` fields — `context_window`, `max_tokens`, `capabilities.vision` /
-`capabilities.reasoning` — the wizard picks those up automatically.
-
-### Known-model fallback (local rules)
-
-When a gateway exposes no metadata at all (stock One API / New API, bare
-proxies, manually added models), the wizard classifies the model id against a
-built-in rule table covering the major families and presets these fields:
-`contextWindow`, `image`, `video`, and `reasoning`:
-
-- **OpenAI** — gpt-5.x (272K), gpt-5-mini (128K), gpt-4o (128K, image),
-  gpt-4.1 (1M), o1/o3/o4 (200K, reasoning)
-- **Anthropic** — claude-4/4.5/4.6 (1M or 200K, image, reasoning),
-  claude-3.7-sonnet (200K, reasoning), claude-3.x (200K)
-- **DeepSeek** — v4 (1M, reasoning), v3/chat/reasoner/r1 (128K, reasoning)
-- **Qwen** — qwen3.x / qwen2.5 (128K, reasoning for thinking variants),
-  `-non-thinking` variants flagged as non-reasoning, `-vl` variants image,
-  qwen2.5-turbo (1M), qwen-long (10M)
-- **Kimi** — kimi-k2/k2.5 (256K, reasoning), kimi-k1.5, moonshot-v1
-- **GLM** — glm-5/4.5/z1 (reasoning), glm-4 (128K), glm-4v (image),
-  glm-4-long (1M)
-- plus Gemini, Llama, Mistral, GPT-OSS
-
-The rules only fill fields the gateway left unknown — real detected values
-always win — and unknown ids are left unset. In the picker, values detected
-from the gateway are shown untagged, while values filled by these local rules
-are tagged `[local rules]`. The save notification tells you
-exactly which models were detected, inferred, or left unset.
-
-`maxTokens` is deliberately not preset: pi sends it to the API as the output
-cap (`max_completion_tokens` / `max_tokens`), and values above a model's real
-maximum cause an API error. If you want to cap a model's output, set it per
-model via Edit provider → Edit a model → Max output tokens.
-
-Everything is best-effort: unknown fields (404s, bare vLLM/LM Studio responses,
-missing capabilities) fall back to the known-model rules, then the defaults —
-text-only input, reasoning on at the `xhigh` ceiling, no
-`contextWindow`/`maxTokens` set.
-
-When the probe finds the provider's reasoning levels (e.g. OpenAI
-`effort_options: ["none", "low", "medium", "high"]`), the wizard writes a
-`thinkingLevelMap` matching those levels exactly: supported levels map to the
-provider's own strings, unsupported ones are `null`, and the reasoning ceiling
-is set to the highest supported level. Models whose thinking cannot be disabled
-(`reasoning.type: "minimal"`) get `off: null` so pi never sends a no-thinking
-request.
-
-## Configuration
-
-The extension uses the host-provided agent directory instead of hard-coding
-`~/.pi/agent`. Existing `models.yml`, `models.yaml`, or `models.json` files are
-kept in their current format. A fresh OMP config is created as `models.yml`;
-normal Pi continues to use `models.json`.
-
-Saving YAML rewrites its formatting and does not preserve comments.
-
-### When the `yaml` package is missing
-
-The `yaml` dependency is only required for OMP's `models.yml`. `pi install`
-installs it automatically; if the folder was copied into
-`~/.pi/agent/extensions/` manually, the extension still starts:
-
-- JSON configs (`models.json`, or JSON-formatted `models.yml`) work fully.
-- Genuine YAML `models.yml` shows a clear error telling you to run
-  `npm install` in the extension folder or reinstall with `pi install` — it
-  never guesses or corrupts the file.
-- New OMP configs are written as JSON, which every YAML parser (including OMP
-  and pi) reads fine.
+OMP: providers and keys stay in `models.yml` / `models.yaml` (existing files
+keep their format; a fresh config is created as `models.yml`). Saving YAML
+rewrites formatting and drops comments.
 
 ## Development
 
-The extension is plain TypeScript loaded directly by pi — no build step. Model
-probing (`/models` + metadata enrichment + known-model rules) lives in the
+Plain TypeScript loaded directly by pi — no build step. Probing lives in the
 separate [model-probe](https://github.com/real-wudaoshi/model-probe) package.
 
 ```bash
 npm run check   # syntax-check every source file with node --check
 ```
 
-### Project layout
-
-- `index.ts` — extension entry point (registers the `/custom-provider` command)
-- `src/types.ts` — shared types and constants
-- `src/config.ts` — models config discovery + JSON/YAML load/save
-- `src/url.ts` — endpoint normalization and other small helpers
-- `src/api-key.ts` — API key resolve/serialize helpers
-- `src/presets.ts` — the probe profile (which metadata sources auto-detect tries)
-- `src/model-entry.ts` — build/read/mutate model entries and provider configs
-- `src/ui/select.ts` — searchable single/multi-select pickers
-- `src/ui/prompts.ts` — wizard input prompts
-- `src/flows/shared.ts` — shared config-mutation helpers for the flows
-- `src/flows/add.ts` — add-provider flow
-- `src/flows/edit.ts` — edit-provider flow (incl. re-probe and per-model edits)
-- `src/flows/delete.ts` — delete-provider flow
+Layout: `index.ts` (command entry) · `src/flows/` (add / edit / delete /
+shared) · `src/ui/` (pickers, prompts) · `src/config.ts` (models.json +
+auth.json I/O, migration) · `src/model-entry.ts` (model/provider config
+builders) · `src/api-key.ts`, `src/url.ts`, `src/presets.ts` (helpers).
 
 ## License
 

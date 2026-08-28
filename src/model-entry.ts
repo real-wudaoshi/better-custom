@@ -58,6 +58,7 @@ export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback
 		reasoning: fallback.reasoning,
 		image: info.image ?? fallback.image,
 		contextWindow: info.contextWindow ?? fallback.contextWindow,
+		maxTokens: info.maxTokens ?? fallback.maxTokens,
 	};
 
 	if (info.reasoning === false) {
@@ -121,6 +122,9 @@ export function buildModelEntry(
 	if (typeof opts.contextWindow === "number" && opts.contextWindow > 0) {
 		entry.contextWindow = opts.contextWindow;
 	}
+	if (typeof opts.maxTokens === "number" && opts.maxTokens > 0) {
+		entry.maxTokens = opts.maxTokens;
+	}
 
 	if (opts.thinkingLevelMap) {
 		// The probe knew the provider's exact thinking levels (e.g. OpenAI
@@ -157,13 +161,17 @@ export function buildProviderConfig(
 		// like pi's own /login flow. Only OMP keeps it inline.
 		...(!SPLIT_AUTH && serializedApiKey ? { apiKey: serializedApiKey } : {}),
 		models: modelIds.map((id) => {
-			// resolveModelInfo layers detected metadata over the local rules and
-			// the built-in defaults (image off, reasoning on) — including for
+			// resolveModelInfo layers detected metadata over models.dev, the local
+			// rules, the api fallback, and the built-in defaults — including for
 			// manually added models, which have no probe info at all.
-			const info = resolveModelInfo(id, infoById?.get(id));
+			const info = resolveModelInfo(id, infoById?.get(id), undefined, api);
 			const override = optionOverrides?.get(id);
 			const modelOpts = override
-				? { ...override, contextWindow: override.contextWindow ?? info.contextWindow }
+				? {
+						...override,
+						contextWindow: override.contextWindow ?? info.contextWindow,
+						maxTokens: override.maxTokens ?? info.maxTokens,
+					}
 				: modelOptionsFromProbe(info, opts);
 			return buildModelEntry(id, modelOpts, ceilingOverrides);
 		}),

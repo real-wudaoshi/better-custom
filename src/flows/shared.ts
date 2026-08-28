@@ -106,6 +106,7 @@ export function providerModelItems(provider: any): SelectItem[] {
 				}
 				if (Array.isArray(model.input) && model.input.includes("image")) details.push("image");
 				if (typeof model.contextWindow === "number") details.push(`context ${model.contextWindow}`);
+				if (typeof model.maxTokens === "number") details.push(`max-out ${model.maxTokens}`);
 			}
 
 			return {
@@ -240,20 +241,25 @@ export async function addModelEntriesToProvider(
 		return;
 	}
 
-	// Added models default to reasoning on (xhigh ceiling); image and context
-	// come from the probe, then models.dev, then the local rules, then
-	// model-probe's defaults (image off, reasoning on). Tune per model later
-	// via Edit provider → Edit a model.
+	// Added models default to reasoning on (xhigh ceiling); image, context and
+	// max-out come from the probe, then models.dev, then the local rules, then
+	// the api fallback, then model-probe's defaults (image off, reasoning on).
+	// Tune per model later via Edit provider → Edit a model.
 	const defaultOpts: ModelOptions = { reasoning: "xhigh", image: true };
 	let detectedCount = 0;
 	const saved = await mutateProvider(ctx, providerId, (p) => {
+		const api = typeof p.api === "string" ? (p.api as ProviderApi) : undefined;
 		const models = Array.isArray(p.models) ? p.models : [];
 		for (const id of fresh) {
-			const mergedInfo = resolveModelInfo(id, infoById?.get(id));
+			const mergedInfo = resolveModelInfo(id, infoById?.get(id), undefined, api);
 			if (probeInfoSummary(mergedInfo).length > 0) detectedCount++;
 			const override = optionOverrides?.get(id);
 			const opts = override
-				? { ...override, contextWindow: override.contextWindow ?? mergedInfo.contextWindow }
+				? {
+						...override,
+						contextWindow: override.contextWindow ?? mergedInfo.contextWindow,
+						maxTokens: override.maxTokens ?? mergedInfo.maxTokens,
+					}
 				: modelOptionsFromProbe(mergedInfo, defaultOpts);
 			models.push(buildModelEntry(id, opts));
 		}
@@ -290,11 +296,12 @@ export function probePickerItems(
 	ids: string[],
 	infoById: Map<string, ModelProbeInfo>,
 	modelsDev?: Map<string, ModelProbeInfo>,
+	api?: ProviderApi,
 ): ProbeItem[] {
 	return ids.map((id) => ({
 		value: id,
 		label: id,
-		description: describeProbeInfo(resolveModelInfo(id, infoById.get(id), modelsDev)),
+		description: describeProbeInfo(resolveModelInfo(id, infoById.get(id), modelsDev, api)),
 	}));
 }
 
@@ -307,8 +314,11 @@ export async function collectProbedModelInfo(
 	listInfo: Map<string, ModelProbeInfo>,
 	gatewayWide?: Map<string, ModelProbeInfo>,
 	modelsDev?: Map<string, ModelProbeInfo>,
+	// The provider's api flavor — enables model-probe's protocol-level
+	// fallback limits when nothing else knows them.
+	api?: ProviderApi,
 ): Promise<Map<string, ModelProbeInfo>> {
-	ctx.ui.notify("Fetching model metadata (context, image/video, reasoning) ...", "info");
+	ctx.ui.notify("Fetching model metadata (context, max-out, image/video, reasoning) ...", "info");
 	const profile = AUTO_PROBE_PROFILE;
 	const resolvedKey = resolveApiKeyForProbe(apiKey.mode, apiKey.value);
 
@@ -329,6 +339,7 @@ export async function collectProbedModelInfo(
 		details = await fetchPerModelInfo(baseUrl, ids, { apiKey: resolvedKey });
 	}
 
-	// Merge (later maps win) and resolve: models.dev, then local rules, then defaults.
-	return finalizeModelInfo(ids, [listInfo, gw, details], { modelsDev: dev });
+	// Merge (later maps win) and resolve: models.dev, then local rules, then
+	// the api fallback, then defaults.
+	return finalizeModelInfo(ids, [listInfo, gw, details], { modelsDev: dev, api });
 }

@@ -102,10 +102,10 @@ async function addFromCatalog(ctx: CommandContext) {
 	let infoById: Map<string, ModelProbeInfo> | undefined;
 	let overrides: Map<string, ModelOptions> | undefined;
 	if (catalog.size > 0) {
-		const picked = await pickMany(ctx, "Select models", probePickerItems([...catalog.keys()], new Map(), catalog));
+		const picked = await pickMany(ctx, "Select models", probePickerItems([...catalog.keys()], new Map(), catalog, api));
 		if (!picked || picked.length === 0) return;
 		ids = picked;
-		infoById = finalizeModelInfo(picked, [], { modelsDev: catalog });
+		infoById = finalizeModelInfo(picked, [], { modelsDev: catalog, api });
 	} else {
 		ctx.ui.notify(`models.dev lists no models for ${provider.name} — enter ids by hand.`, "warning");
 		const manual = await promptManualModels(ctx, style);
@@ -177,7 +177,7 @@ async function collectModelIds(
 			// it shows real detected values instead of catalog/rule guesses.
 			let gatewayWide: Map<string, ModelProbeInfo> | undefined;
 			if (AUTO_PROBE_PROFILE.modelInfo || AUTO_PROBE_PROFILE.publicCatalog || AUTO_PROBE_PROFILE.modelGroupInfo) {
-				ctx.ui.notify("Fetching model metadata (context, image/video, reasoning) ...", "info");
+				ctx.ui.notify("Fetching model metadata (context, max-out, image/video, reasoning) ...", "info");
 				gatewayWide = await fetchGatewayWideInfo(style, apiKey, probed.baseUrl, AUTO_PROBE_PROFILE);
 				if (gatewayWide.size > 0) {
 					for (const [id, info] of gatewayWide) {
@@ -189,10 +189,10 @@ async function collectModelIds(
 			// models.dev catalog tier — above the local rules, below detected values.
 			const modelsDev = style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl) : undefined;
 
-			const picked = await pickMany(ctx, "Select models", probePickerItems(probed.ids, probed.infoById, modelsDev));
+			const picked = await pickMany(ctx, "Select models", probePickerItems(probed.ids, probed.infoById, modelsDev, api));
 			if (!picked || picked.length === 0) return null;
 
-			const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, gatewayWide, modelsDev);
+			const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, gatewayWide, modelsDev, api);
 			return { ids: picked, infoById, baseUrl };
 		} catch (error) {
 			const schemeHint = hasExplicitScheme(trimmedEndpointInput) ? "" : " No http:// or https:// was provided.";

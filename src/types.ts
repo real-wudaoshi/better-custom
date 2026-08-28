@@ -14,6 +14,7 @@ export type ModelOptions = {
 	reasoning: ReasoningCeiling;
 	image: boolean;
 	contextWindow?: number;
+	maxTokens?: number;
 	// When set, written verbatim instead of deriving a map from the ceiling. Used
 	// when a probe learned the provider's exact thinking levels (effort options).
 	thinkingLevelMap?: Record<string, string | null>;
