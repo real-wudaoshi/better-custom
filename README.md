@@ -89,7 +89,7 @@ overrides) are preserved.
 Every field is resolved in tiers, highest priority first:
 
 1. **Detected** — real data from the gateway: LiteLLM `/model/info` and
-   `/model_group/info`, USTC-style `GET {site}/api/models/public` (no auth),
+   `/model_group/info`, New API-style `GET {site}/api/models/public` (no auth),
    OpenAI `GET /models/{id}` (incl. `capabilities.reasoning.effort_options`),
    inline `/models` list metadata (OpenRouter, One API / New API `meta` fields
    and `supported_endpoint_types`), Gemini `inputTokenLimit`, Ollama

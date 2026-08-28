@@ -88,7 +88,7 @@ YAML 子集)。
 每个字段按优先级分层解析:
 
 1. **实测** —— 来自网关的真实数据:LiteLLM `/model/info` 和
-   `/model_group/info`、USTC 风格的 `GET {site}/api/models/public`(免鉴权)、
+   `/model_group/info`、New API 风格的 `GET {site}/api/models/public`(免鉴权)、
    OpenAI `GET /models/{id}`(含 `capabilities.reasoning.effort_options`)、
    `/models` 列表内联元数据(OpenRouter、One API / New API 的 `meta` 字段
    和 `supported_endpoint_types`)、Gemini 的 `inputTokenLimit`、Ollama 的
