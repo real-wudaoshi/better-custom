@@ -368,7 +368,7 @@ export function providerStyleOf(provider: unknown): ProviderStyle {
 	return "openai";
 }
 
-export type ModelsDevOption = { providerId: string; key: string; info: ModelProbeInfo };
+export type ModelsDevOption = { providerId: string; key: string; info: ModelProbeInfo; rank: number };
 
 // Look up every models.dev catalog entry matching a model id, across all
 // providers, ignoring which endpoint the local provider points at. Relay

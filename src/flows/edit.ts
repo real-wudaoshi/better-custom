@@ -336,17 +336,17 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 		const hasHeaders = model.headers && Object.keys(model.headers).length > 0;
 		const override = model.baseUrl || model.api ? "set" : "unset";
 
-	const field = await selectOne(ctx, `Edit ${modelId}`, [
-		{ value: "reasoning", label: "Reasoning", suffix: ` • ${opts.reasoning}`, description: "Set the reasoning ceiling (off → xhigh)" },
-		{ value: "image", label: "Image input", suffix: ` • ${opts.image ? "on" : "off"}`, description: "Toggle image input (text+image vs text-only)" },
-		{ value: "context", label: "Context window", suffix: ` • ${ctxWin}`, description: "Max context tokens for this model" },
-		{ value: "maxtokens", label: "Max output tokens", suffix: ` • ${maxTok}`, description: "Max tokens this model may generate" },
-		{ value: "override", label: "Headers / endpoint override", suffix: ` • ${hasHeaders ? "headers" : override}`, description: "Per-model HTTP headers and api/baseUrl override" },
-		{ value: "refresh", label: "Refresh metadata", description: "Pull context/image/reasoning from models.dev or the endpoint's /models" },
-		{ value: "delete", label: "Delete this model", description: "Remove this model from the provider" },
-		{ value: "back", label: "Back", description: "Return to the model list" },
-	]);
-	if (!field || field === "back") return false;
+		const field = await selectOne(ctx, `Edit ${modelId}`, [
+			{ value: "reasoning", label: "Reasoning", suffix: ` • ${opts.reasoning}`, description: "Set the reasoning ceiling (off → xhigh)" },
+			{ value: "image", label: "Image input", suffix: ` • ${opts.image ? "on" : "off"}`, description: "Toggle image input (text+image vs text-only)" },
+			{ value: "context", label: "Context window", suffix: ` • ${ctxWin}`, description: "Max context tokens for this model" },
+			{ value: "maxtokens", label: "Max output tokens", suffix: ` • ${maxTok}`, description: "Max tokens this model may generate" },
+			{ value: "override", label: "Headers / endpoint override", suffix: ` • ${hasHeaders ? "headers" : override}`, description: "Per-model HTTP headers and api/baseUrl override" },
+			{ value: "refresh", label: "Refresh metadata", description: "Pull context/image/reasoning from models.dev or the endpoint's /models" },
+			{ value: "delete", label: "Delete this model", description: "Remove this model from the provider" },
+			{ value: "back", label: "Back", description: "Return to the model list" },
+		]);
+		if (!field || field === "back") return false;
 
 		if (field === "reasoning") {
 			const reasoning = await promptReasoning(ctx, opts.reasoning);
@@ -808,7 +808,6 @@ async function refreshModelMetadata(ctx: CommandContext, providerId: string, mod
 	});
 	if (applied) ctx.ui.notify(`Updated "${modelId}" with ${changes.length} change${changes.length === 1 ? "" : "s"}.`, "info");
 }
-
 
 async function addModelsToProvider(ctx: CommandContext, providerId: string) {
 	let provider: any;
