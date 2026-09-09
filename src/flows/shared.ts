@@ -2,8 +2,11 @@ import {
 	describeProbeInfo,
 	fetchGatewayWideInfo as probeGatewayWideInfo,
 	fetchModelsDevInfoForBaseUrl,
+	fetchModelsDevModels,
+	fetchModelsDevProviders,
 	fetchPerModelInfo,
 	finalizeModelInfo,
+	normalizeModelIdCandidates,
 	probeInfoSummary,
 	resolveModelInfo,
 } from "model-probe";
@@ -342,4 +345,96 @@ export async function collectProbedModelInfo(
 	// Merge (later maps win) and resolve: models.dev, then local rules, then
 	// the api fallback, then defaults.
 	return finalizeModelInfo(ids, [listInfo, gw, details], { modelsDev: dev, api });
+}
+
+// The ollama style leaves a compat object with BOTH flags false; every other
+// style writes only supportsDeveloperRole. Keying on compat's presence alone
+// misreads plain OpenAI-compatible providers as Ollama.
+export function providerStyleOf(provider: unknown): ProviderStyle {
+	if (!provider || typeof provider !== "object") return "openai";
+	if ("api" in provider) {
+		const api = provider.api;
+		if (api === "anthropic-messages") return "anthropic";
+		if (api === "google-generative-ai") return "gemini";
+	}
+	if ("compat" in provider && provider.compat && typeof provider.compat === "object") {
+		const compat = provider.compat;
+		if ("supportsDeveloperRole" in compat && "supportsReasoningEffort" in compat) {
+			const developerRole = compat.supportsDeveloperRole;
+			const reasoningEffort = compat.supportsReasoningEffort;
+			if (developerRole === false && reasoningEffort === false) return "ollama";
+		}
+	}
+	return "openai";
+}
+
+export type ModelsDevOption = { providerId: string; key: string; info: ModelProbeInfo };
+
+// Look up every models.dev catalog entry matching a model id, across all
+// providers, ignoring which endpoint the local provider points at. Relay
+// gateways decorate ids with prefixes (foo/openai/gpt-5.6-sol) and models.dev
+// keys official-provider models without the vendor prefix (anthropic's table
+// has "claude-sonnet-5") while aggregators key them with it, so every
+// normalization candidate is looked up as-is and with each leading segment
+// dropped. Options are ordered best-guess-first: the vendor named in the id
+// wins, then providers by how often the catalog cites "vendor/key" (the
+// maker's entry is cited far more than any host's copy), then catalog order.
+export async function fetchModelsDevOptionsForModel(modelId: string): Promise<ModelsDevOption[]> {
+	const providers = await fetchModelsDevProviders();
+	const tables = new Map<string, Map<string, ModelProbeInfo>>();
+	for (const provider of providers.values()) {
+		tables.set(provider.id, await fetchModelsDevModels(provider.id));
+	}
+	// fetchModelsDevProviders only lists providers with an OpenAI-compatible
+	// baseUrl; native-API makers (anthropic, google, zai, ...) are absent. The
+	// rest of the catalog still cites them as "vendor/model", so every cited
+	// slug without a table yet gets one loaded through fetchModelsDevModels,
+	// which reads the full catalog directly.
+	const referenceCounts = new Map<string, number>();
+	for (const table of tables.values()) {
+		for (const id of table.keys()) {
+			const separator = id.indexOf("/");
+			if (separator <= 0) continue;
+			const vendor = id.slice(0, separator).toLowerCase();
+			referenceCounts.set(vendor, (referenceCounts.get(vendor) ?? 0) + 1);
+		}
+	}
+	for (const slug of referenceCounts.keys()) {
+		if (tables.has(slug)) continue;
+		const table = await fetchModelsDevModels(slug);
+		if (table.size > 0) tables.set(slug, table);
+	}
+
+	const seen = new Set<string>();
+	const options: ModelsDevOption[] = [];
+	const collect = (providerId: string, key: string, rank: number) => {
+		const dedupe = `${providerId}\0${JSON.stringify(key)}`;
+		if (seen.has(dedupe)) return;
+		seen.add(dedupe);
+		const info = tables.get(providerId)?.get(key);
+		if (info) options.push({ providerId, key, info, rank });
+	};
+
+	for (const candidate of normalizeModelIdCandidates(modelId)) {
+		const segments = candidate.split("/");
+		const keys = segments.length > 1 ? segments.slice(1).map((_, i) => segments.slice(i + 1).join("/")) : [candidate];
+		for (let i = 0; i < segments.length - 1; i++) {
+			const vendor = segments[i];
+			for (const key of keys) {
+				if (tables.has(vendor)) collect(vendor, key, 0);
+			}
+		}
+		for (const key of keys) {
+			const holders = [...tables.keys()]
+				.filter(providerId => tables.get(providerId)?.has(key))
+				.sort(
+					(a, b) =>
+						(referenceCounts.get(b.toLowerCase()) ?? 0) - (referenceCounts.get(a.toLowerCase()) ?? 0) ||
+						a.length - b.length,
+				);
+			for (const providerId of holders) collect(providerId, key, 1);
+		}
+		if (options.length > 0) break;
+	}
+	return options.sort((a, b) => a.rank - b.rank);
 }

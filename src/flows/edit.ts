@@ -3,7 +3,7 @@ import { apiKeyFromProvider, resolveApiKeyForProbe } from "../api-key.ts";
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, renameProviderApiKey, saveModelsConfig } from "../config.ts";
 import { applyReasoning, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
-import type { CommandContext, ModelProbeInfo, ModelsConfig, ProbeResult, ProviderApi, ProviderStyle } from "../types.ts";
+import type { CommandContext, ModelProbeInfo, ModelsConfig, ProbeResult, ProviderApi, SelectItem } from "../types.ts";
 import { pickMany, pickTriState, selectOne } from "../ui/select.ts";
 import type { TriItem } from "../ui/select.ts";
 import {
@@ -16,14 +16,17 @@ import {
 } from "../ui/prompts.ts";
 import { buildProbeUrl, normalizeEndpoint, slugify } from "../url.ts";
 import {
+	type ModelsDevOption,
 	addModelEntriesToProvider,
 	collectProbedModelInfo,
 	describeProvider,
 	describeProviderInline,
 	fetchGatewayWideInfo,
+	fetchModelsDevOptionsForModel,
 	mutateModel,
 	mutateProvider,
 	providerModelItems,
+	providerStyleOf,
 	removeProvider,
 } from "./shared.ts";
 
@@ -333,16 +336,17 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 		const hasHeaders = model.headers && Object.keys(model.headers).length > 0;
 		const override = model.baseUrl || model.api ? "set" : "unset";
 
-		const field = await selectOne(ctx, `Edit ${modelId}`, [
-			{ value: "reasoning", label: "Reasoning", suffix: ` • ${opts.reasoning}`, description: "Set the reasoning ceiling (off → xhigh)" },
-			{ value: "image", label: "Image input", suffix: ` • ${opts.image ? "on" : "off"}`, description: "Toggle image input (text+image vs text-only)" },
-			{ value: "context", label: "Context window", suffix: ` • ${ctxWin}`, description: "Max context tokens for this model" },
-			{ value: "maxtokens", label: "Max output tokens", suffix: ` • ${maxTok}`, description: "Max tokens this model may generate" },
-			{ value: "override", label: "Headers / endpoint override", suffix: ` • ${hasHeaders ? "headers" : override}`, description: "Per-model HTTP headers and api/baseUrl override" },
-			{ value: "delete", label: "Delete this model", description: "Remove this model from the provider" },
-			{ value: "back", label: "Back", description: "Return to the model list" },
-		]);
-		if (!field || field === "back") return false;
+	const field = await selectOne(ctx, `Edit ${modelId}`, [
+		{ value: "reasoning", label: "Reasoning", suffix: ` • ${opts.reasoning}`, description: "Set the reasoning ceiling (off → xhigh)" },
+		{ value: "image", label: "Image input", suffix: ` • ${opts.image ? "on" : "off"}`, description: "Toggle image input (text+image vs text-only)" },
+		{ value: "context", label: "Context window", suffix: ` • ${ctxWin}`, description: "Max context tokens for this model" },
+		{ value: "maxtokens", label: "Max output tokens", suffix: ` • ${maxTok}`, description: "Max tokens this model may generate" },
+		{ value: "override", label: "Headers / endpoint override", suffix: ` • ${hasHeaders ? "headers" : override}`, description: "Per-model HTTP headers and api/baseUrl override" },
+		{ value: "refresh", label: "Refresh metadata", description: "Pull context/image/reasoning from models.dev or the endpoint's /models" },
+		{ value: "delete", label: "Delete this model", description: "Remove this model from the provider" },
+		{ value: "back", label: "Back", description: "Return to the model list" },
+	]);
+	if (!field || field === "back") return false;
 
 		if (field === "reasoning") {
 			const reasoning = await promptReasoning(ctx, opts.reasoning);
@@ -370,6 +374,8 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 			await mutateModel(ctx, providerId, modelId, (m) => { if (result === 0) delete m.maxTokens; else m.maxTokens = result; });
 		} else if (field === "override") {
 			await editModelOverride(ctx, providerId, modelId);
+		} else if (field === "refresh") {
+			await refreshModelMetadata(ctx, providerId, modelId);
 		} else if (field === "delete") {
 			const ok = await ctx.ui.confirm("Delete model?", `Remove "${modelId}" from "${providerId}"?`);
 			if (!ok) continue;
@@ -521,14 +527,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	const overlapIds = probed.ids.filter((id) => storedSet.has(id));
 	const unsupportedIds = storedIds.filter((id) => !probedSet.has(id));
 
-	const style: ProviderStyle =
-		provider?.api === "anthropic-messages"
-			? "anthropic"
-			: provider?.api === "google-generative-ai"
-				? "gemini"
-				: provider?.compat
-					? "ollama"
-					: "openai";
+	const style = providerStyleOf(provider);
 
 	// Gateway-wide metadata (one call per source) — fetch BEFORE any picker so
 	// it shows real detected values instead of local-rule guesses. Re-probe
@@ -666,6 +665,151 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	}
 }
 
+// Re-pull a single model's context / max-out / image / reasoning from a chosen
+// source and apply the diff. models.dev answers with the model's official
+// metadata, matched across every catalog provider (relay-prefixed ids match on
+// their last segment); the endpoint source probes /models plus the
+// gateway-wide metadata sources. Diff and merge rules are shared with
+// reprobeProvider so the user sees the same labels.
+async function refreshModelMetadata(ctx: CommandContext, providerId: string, modelId: string) {
+	let provider: any;
+	try {
+		provider = loadModelsConfig().providers?.[providerId];
+	} catch (error) {
+		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		return;
+	}
+	if (!provider) {
+		ctx.ui.notify(`Provider "${providerId}" no longer exists.`, "warning");
+		return;
+	}
+
+	const style = providerStyleOf(provider);
+	const api = typeof provider?.api === "string" ? (provider.api as ProviderApi) : "openai-completions";
+	const modelEntry = findModel(provider, modelId);
+	const modelOverrideBase = typeof modelEntry?.baseUrl === "string" ? (modelEntry.baseUrl as string) : undefined;
+	const providerBaseUrl = typeof provider?.baseUrl === "string" ? provider.baseUrl : "";
+	const probeBase = modelOverrideBase
+		? normalizeEndpoint(modelOverrideBase, api)
+		: providerBaseUrl
+			? normalizeEndpoint(providerBaseUrl, api)
+			: "";
+
+	const sourceItems: SelectItem[] = [
+		{
+			value: "modelsdev",
+			label: "models.dev",
+			description: "Official metadata from the models.dev catalog, matched across all providers",
+		},
+	];
+	if (probeBase) {
+		sourceItems.push({
+			value: "endpoint",
+			label: "Endpoint /models",
+			description: "Probe the endpoint's /models and the gateway-wide metadata sources",
+		});
+	}
+
+	const source = await selectOne(ctx, `Refresh metadata for ${modelId}`, sourceItems);
+	if (!source) return;
+	const stored = findModel(provider, modelId);
+	if (source === "modelsdev") {
+		let options: ModelsDevOption[];
+		try {
+			ctx.ui.notify("Fetching the models.dev catalog ...", "info");
+			options = await fetchModelsDevOptionsForModel(modelId);
+		} catch (error) {
+			ctx.ui.notify(`Could not fetch models.dev: ${error instanceof Error ? error.message : String(error)}`, "error");
+			return;
+		}
+		if (options.length === 0) {
+			ctx.ui.notify("models.dev has no entry for this model.", "warning");
+			return;
+		}
+
+		// Providers disagree on republished limits (hosts cap context/output
+		// below the maker's claim), so every match is listed with its own diff
+		// and the user picks which numbers to trust.
+		const items: SelectItem[] = options.map((option, index) => {
+			const changes = diffStoredModel(stored, option.info);
+			return {
+				value: String(index),
+				label: `${option.providerId}/${option.key}`,
+				description:
+					changes.length > 0
+						? changes.map((c) => c.label).join(" • ")
+						: "no changes — entry matches the stored config",
+			};
+		});
+		items.push({ value: "cancel", label: "Cancel", description: "Keep the stored config" });
+		const picked = await selectOne(ctx, `models.dev entries for ${modelId}`, items);
+		if (!picked || picked === "cancel") return;
+
+		const chosen = options[Number(picked)];
+		const changes = diffStoredModel(stored, chosen.info);
+		if (changes.length === 0) {
+			ctx.ui.notify(`${modelId}: the selected entry matches the stored config.`, "info");
+			return;
+		}
+		const applied = await mutateModel(ctx, providerId, modelId, (m) => {
+			applyMetaChanges(m, chosen.info, changes);
+		});
+		if (applied) ctx.ui.notify(`Updated "${modelId}" from models.dev (${chosen.providerId}).`, "info");
+		return;
+	}
+
+	if (api !== "openai-completions" && api !== "openai-responses" && api !== "anthropic-messages" && api !== "google-generative-ai") {
+		ctx.ui.notify("This provider's API doesn't expose /models.", "warning");
+		return;
+	}
+	const apiKey = apiKeyFromProvider(providerId, provider);
+	let probed: ProbeResult;
+	try {
+		ctx.ui.notify(`Probing ${buildProbeUrl(probeBase)} ...`, "info");
+		probed = await probeModels(probeBase, resolveApiKeyForProbe(apiKey.mode, apiKey.value));
+	} catch (error) {
+		ctx.ui.notify(`Probe failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+		return;
+	}
+	if (!probed.ids.includes(modelId) && !probed.infoById.has(modelId)) {
+		ctx.ui.notify(`The endpoint did not return "${modelId}".`, "warning");
+		return;
+	}
+	const gatewayWide = await fetchGatewayWideInfo(style, apiKey, probed.baseUrl, AUTO_PROBE_PROFILE);
+	const modelsDev = await fetchModelsDevInfoForBaseUrl(probed.baseUrl);
+	const infoById = await collectProbedModelInfo(
+		ctx,
+		style,
+		apiKey,
+		probed.baseUrl,
+		[modelId],
+		probed.infoById,
+		gatewayWide,
+		modelsDev,
+		api,
+	);
+	const resolved = infoById.get(modelId);
+	if (!resolved) {
+		ctx.ui.notify("The endpoint returned no metadata for this model.", "warning");
+		return;
+	}
+	const changes = diffStoredModel(stored, resolved);
+	if (changes.length === 0) {
+		ctx.ui.notify(`${modelId}: already up to date.`, "info");
+		return;
+	}
+
+	const labels = changes.map((c) => c.label).join(" • ");
+	const ok = await ctx.ui.confirm(`Apply ${changes.length} change${changes.length === 1 ? "" : "s"}?`, `${modelId}: ${labels}`);
+	if (!ok) return;
+
+	const applied = await mutateModel(ctx, providerId, modelId, (m) => {
+		applyMetaChanges(m, resolved, changes);
+	});
+	if (applied) ctx.ui.notify(`Updated "${modelId}" with ${changes.length} change${changes.length === 1 ? "" : "s"}.`, "info");
+}
+
+
 async function addModelsToProvider(ctx: CommandContext, providerId: string) {
 	let provider: any;
 	try {
@@ -674,14 +818,7 @@ async function addModelsToProvider(ctx: CommandContext, providerId: string) {
 		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return;
 	}
-	const style: ProviderStyle =
-		provider?.api === "anthropic-messages"
-			? "anthropic"
-			: provider?.api === "google-generative-ai"
-				? "gemini"
-				: provider?.compat
-					? "ollama"
-					: "openai";
+	const style = providerStyleOf(provider);
 	const manual = await promptManualModels(ctx, style);
 	if (!manual) return;
 	await addModelEntriesToProvider(ctx, providerId, manual.ids, undefined, manual.options);
