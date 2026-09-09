@@ -2,6 +2,7 @@ import * as CodingAgent from "@mariozechner/pi-coding-agent";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ModelsConfig } from "./types.ts";
 
 type YamlModule = {
@@ -9,24 +10,46 @@ type YamlModule = {
 	stringify(value: any, options?: { lineWidth?: number }): string;
 };
 
-// `yaml` is only needed to read/write OMP's models.yml. When the package is
-// installed via `pi install`, pi runs npm install so the dependency is present.
-// But when this folder is copied manually into ~/.pi/agent/extensions/ the
-// dependency may be missing — and a static `import ... from "yaml"` would crash
-// the whole extension at load time. Load it lazily so the extension always
-// starts; YAML configs then degrade to JSON, which is a valid YAML subset.
-const requireFromHere = (() => {
-	try {
-		return createRequire(import.meta.url);
-	} catch {
-		return createRequire(join(process.cwd(), "index.ts"));
+// `yaml` is only needed to read/write OMP's models.yml. A static
+// `import ... from "yaml"` would crash the whole extension at load time when
+// the package is absent, so load it lazily. The previous build used
+// `createRequire(import.meta.url)("yaml")` and let Node walk `node_modules`,
+// but the OMP compiled-binary loader serves this file from an `onLoad` hook
+// whose module graph never reaches the plugin's sibling `node_modules`, so
+// that path throws `Cannot find module 'yaml'` even when the package is
+// installed. Walk `node_modules` ourselves from the extension's own
+// location, then require the resolved entry through a require anchored at
+// the package itself.
+function resolveSiblingPackage(name: string): string | null {
+	let dir = dirname(fileURLToPath(import.meta.url));
+	while (true) {
+		const candidate = join(dir, "node_modules", name);
+		if (existsSync(join(candidate, "package.json"))) return candidate;
+		const parent = dirname(dir);
+		if (parent === dir) return null;
+		dir = parent;
 	}
-})();
+}
+
 let yamlModule: YamlModule | undefined;
-try {
-	yamlModule = requireFromHere("yaml") as YamlModule;
-} catch {
-	yamlModule = undefined;
+const yamlPkgRoot = resolveSiblingPackage("yaml");
+if (yamlPkgRoot) {
+	try {
+		// Read the package's `main` (or the `node` condition under `exports["."]`)
+		// and require the resolved file directly. `createRequire(pkgDir)(pkgDir)`
+		// would let the host do `require(<dir>)` resolution, which the OMP
+		// compiled-binary loader rejects with "Cannot find module"; pinning the
+		// absolute file path keeps the require anchored at a real source on disk.
+		const manifest = JSON.parse(readFileSync(join(yamlPkgRoot, "package.json"), "utf8")) as {
+			main?: string;
+			exports?: { "."?: { node?: string; default?: string } };
+		};
+		const mainRel = manifest.exports?.["."]?.node ?? manifest.main ?? "./index.js";
+		const mainAbs = join(yamlPkgRoot, mainRel);
+		yamlModule = createRequire(mainAbs)(mainAbs) as YamlModule;
+	} catch {
+		yamlModule = undefined;
+	}
 }
 
 const AGENT_DIR = CodingAgent.getAgentDir();
