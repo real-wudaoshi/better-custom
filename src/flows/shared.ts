@@ -56,7 +56,21 @@ export async function mutateProvider(
 		ctx.ui.notify(`Could not write ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return false;
 	}
+	await refreshModelRegistry(ctx);
 	return true;
+}
+
+// pi reads models.json once at startup and keeps it in memory. After every
+// write, reload it into the running session so added/removed models show up
+// in /model immediately instead of after a restart. Best-effort: the file is
+// already saved, a failed refresh must not fail the mutation.
+export async function refreshModelRegistry(ctx: CommandContext): Promise<void> {
+	try {
+		await ctx.modelRegistry?.refresh();
+	} catch {
+		// The config is on disk; a stale in-memory snapshot fixes itself on
+		// restart, so a refresh failure is not worth an error dialog.
+	}
 }
 
 // Mutate a single model entry in place and save.
@@ -162,6 +176,7 @@ export async function removeProvider(ctx: CommandContext, providerId: string): P
 		ctx.ui.notify(`Could not write ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return false;
 	}
+	await refreshModelRegistry(ctx);
 	// Drop the auth.json entry along with the provider so no orphan key stays
 	// behind. Best-effort: a failing auth write must not undo the deletion.
 	try {
@@ -196,6 +211,7 @@ export async function persistProvider(ctx: CommandContext, providerId: string, p
 		ctx.ui.notify(`Could not write ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return false;
 	}
+	await refreshModelRegistry(ctx);
 	return true;
 }
 

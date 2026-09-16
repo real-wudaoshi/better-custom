@@ -27,6 +27,7 @@ import {
 	mutateProvider,
 	providerModelItems,
 	providerStyleOf,
+	refreshModelRegistry,
 	removeProvider,
 } from "./shared.ts";
 
@@ -240,6 +241,7 @@ async function renameProvider(ctx: CommandContext, providerId: string): Promise<
 		ctx.ui.notify(`Could not write ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return null;
 	}
+	await refreshModelRegistry(ctx);
 
 	// Carry the auth.json entry over to the new id; best-effort, the rename
 	// itself already succeeded.
@@ -440,8 +442,8 @@ type DiffableField = (typeof DIFFABLE_FIELDS)[number];
 type MetaChange = { field: DiffableField; label: string };
 
 // Compare a stored model entry against freshly resolved probe info. Returns
-// the authoritative differences, rendered as `context 128000 -> 1000000` /
-// `max-out 8192 -> 32000` for numeric fields and `image [+]` / `reasoning [-]`
+// the authoritative differences, rendered as `context 128000→1000000` /
+// `max-out 8192→32000` for numeric fields and `image [+]` / `reasoning [-]`
 // for boolean fields.
 function diffStoredModel(model: any, info: ModelProbeInfo): MetaChange[] {
 	const guessed = new Set<string>([...(info.inferredFields ?? []), ...(info.defaultedFields ?? [])]);
@@ -451,10 +453,10 @@ function diffStoredModel(model: any, info: ModelProbeInfo): MetaChange[] {
 		if (value === undefined || guessed.has(field)) continue;
 		if (field === "contextWindow") {
 			const old = typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
-			if (old !== value) changes.push({ field, label: `context ${old ?? "unset"} -> ${value}` });
+			if (old !== value) changes.push({ field, label: `context ${old ?? "unset"}→${value}` });
 		} else if (field === "maxTokens") {
 			const old = typeof model?.maxTokens === "number" ? model.maxTokens : undefined;
-			if (old !== value) changes.push({ field, label: `max-out ${old ?? "unset"} -> ${value}` });
+			if (old !== value) changes.push({ field, label: `max-out ${old ?? "unset"}→${value}` });
 		} else if (field === "image") {
 			const old = Array.isArray(model?.input) ? model.input.includes("image") : true;
 			if (old !== value) changes.push({ field, label: `image [${value ? "+" : "-"}]` });
@@ -477,13 +479,14 @@ function applyMetaChanges(entry: any, info: ModelProbeInfo, changes: MetaChange[
 }
 
 // One-line summary of a stored entry's current config, for the re-probe list.
+// Empty string when the entry carries no metadata at all.
 function storedModelSummary(model: any): string {
 	const details: string[] = [];
 	if (model?.reasoning === true) details.push(`reasoning:${readModelOptions(model).reasoning}`);
 	if (Array.isArray(model?.input) && model.input.includes("image")) details.push("image");
 	if (typeof model?.contextWindow === "number") details.push(`context ${model.contextWindow}`);
 	if (typeof model?.maxTokens === "number") details.push(`max-out ${model.maxTokens}`);
-	return details.length > 0 ? details.join(" • ") : "up to date";
+	return details.join(" • ");
 }
 
 async function reprobeProvider(ctx: CommandContext, providerId: string) {
@@ -576,10 +579,14 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 
 	const items: TriItem[] = [];
 	for (const [id, changes] of changeById) {
+		// Show the incoming changes AND the rest of the stored config, so the
+		// unchanged fields stay visible next to the diff.
+		const stored = storedModels.find((m) => modelIdOf(m) === id);
+		const current = storedModelSummary(stored);
 		items.push({
 			value: id,
 			label: id,
-			description: changes.map((c) => c.label).join(" • "),
+			description: changes.map((c) => c.label).join(" • ") + (current ? ` · current: ${current}` : ""),
 			searchText: `${id} updated`,
 			states: ["off", "mid", "on"],
 			initial: "mid",
@@ -603,7 +610,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 		items.push({
 			value: id,
 			label: `${id} • unsupported`,
-			description: storedModelSummary(stored),
+			description: storedModelSummary(stored) || "no metadata stored",
 			searchText: `${id} unsupported`,
 			states: ["off", "on"],
 			initial: "on",
@@ -612,7 +619,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	for (const id of storedIds) {
 		if (changeById.has(id) || !probedSet.has(id)) continue;
 		const stored = storedModels.find((m) => modelIdOf(m) === id);
-		items.push({ value: id, label: id, description: storedModelSummary(stored), states: ["off", "on"], initial: "on" });
+		items.push({ value: id, label: id, description: storedModelSummary(stored) || "no changes", states: ["off", "on"], initial: "on" });
 	}
 
 	const picked = await pickTriState(ctx, `Re-probe ${providerId}`, items);
@@ -730,15 +737,16 @@ async function refreshModelMetadata(ctx: CommandContext, providerId: string, mod
 		// Providers disagree on republished limits (hosts cap context/output
 		// below the maker's claim), so every match is listed with its own diff
 		// and the user picks which numbers to trust.
+		const current = storedModelSummary(stored);
 		const items: SelectItem[] = options.map((option, index) => {
 			const changes = diffStoredModel(stored, option.info);
 			return {
 				value: String(index),
 				label: `${option.providerId}/${option.key}`,
 				description:
-					changes.length > 0
+					(changes.length > 0
 						? changes.map((c) => c.label).join(" • ")
-						: "no changes — entry matches the stored config",
+						: "no changes — entry matches the stored config") + (current ? ` · current: ${current}` : ""),
 			};
 		});
 		items.push({ value: "cancel", label: "Cancel", description: "Keep the stored config" });
