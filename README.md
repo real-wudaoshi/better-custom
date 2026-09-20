@@ -125,6 +125,17 @@ Pi (official split, same as `/login`):
 - Legacy inline `apiKey` entries migrate to `auth.json` on the next save;
   deleting a provider removes its `auth.json` entry, renaming moves it.
 
+### Built-in id collision
+
+Naming a custom provider after one of pi's built-in provider ids (e.g.
+`deepseek`, `openai`) does **not** replace the built-in — pi merges the two:
+the built-in model catalog stays visible even if you delete those models here,
+and `auth.json` is keyed by id, so `/login` and `/logout` for the built-in
+also read/wipe your key. The extension warns when you add, rename to, or
+delete models from a colliding id. Prefer a distinct id (e.g. `-relay`
+suffix); if you keep the collision on purpose, use `/hide-models`
+(pi-hide-providers) to hide built-in catalog entries you don't want.
+
 OMP: providers and keys stay in `models.yml` / `models.yaml` (existing files
 keep their format; a fresh config is created as `models.yml`). Saving YAML
 rewrites formatting and drops comments.

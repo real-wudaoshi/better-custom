@@ -1,6 +1,6 @@
 import { describeProbeInfo, fetchModelsDevInfoForBaseUrl, probeModels } from "model-probe";
 import { apiKeyFromProvider, resolveApiKeyForProbe } from "../api-key.ts";
-import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, renameProviderApiKey, saveModelsConfig } from "../config.ts";
+import { BUILTIN_COLLISION_WARNING, BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, renameProviderApiKey, saveModelsConfig } from "../config.ts";
 import { applyReasoning, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { CommandContext, ModelProbeInfo, ModelsConfig, ProbeResult, ProviderApi, SelectItem } from "../types.ts";
@@ -220,10 +220,7 @@ async function renameProvider(ctx: CommandContext, providerId: string): Promise<
 	}
 
 	if (BUILTIN_PROVIDER_IDS.has(newId)) {
-		const ok = await ctx.ui.confirm(
-			"Override built-in provider?",
-			`"${newId}" matches a built-in provider id. Saving this will override that provider in the active models config. Continue?`,
-		);
+		const ok = await ctx.ui.confirm("Built-in id collision", `"${newId}" — ${BUILTIN_COLLISION_WARNING}`);
 		if (!ok) return null;
 	}
 
@@ -273,9 +270,12 @@ async function deleteModelsFromProvider(ctx: CommandContext, providerId: string)
 
 	const picked = await pickMany(ctx, `Delete models from ${providerId}`, modelItems);
 	if (!picked || picked.length === 0) return;
+	const collisionNote = BUILTIN_PROVIDER_IDS.has(providerId)
+		? `\nNote: "${providerId}" shares its id with a built-in provider — models that also ship in pi's built-in catalog will still appear in /model after deletion.`
+		: "";
 	const confirmed = await ctx.ui.confirm(
 		"Delete models?",
-		`Remove ${picked.length} model${picked.length === 1 ? "" : "s"} from "${providerId}":\n${picked.map((id) => `- ${id}`).join("\n")}`,
+		`Remove ${picked.length} model${picked.length === 1 ? "" : "s"} from "${providerId}":\n${picked.map((id) => `- ${id}`).join("\n")}${collisionNote}`,
 	);
 	if (!confirmed) return;
 
@@ -379,7 +379,10 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 		} else if (field === "refresh") {
 			await refreshModelMetadata(ctx, providerId, modelId);
 		} else if (field === "delete") {
-			const ok = await ctx.ui.confirm("Delete model?", `Remove "${modelId}" from "${providerId}"?`);
+			const collisionNote = BUILTIN_PROVIDER_IDS.has(providerId)
+				? ` Note: "${providerId}" shares its id with a built-in provider — if this model also ships in pi's built-in catalog, it will still appear in /model after deletion.`
+				: "";
+			const ok = await ctx.ui.confirm("Delete model?", `Remove "${modelId}" from "${providerId}"?${collisionNote}`);
 			if (!ok) continue;
 			const saved = await mutateProvider(ctx, providerId, (p) => {
 				const models = Array.isArray(p.models) ? p.models : [];

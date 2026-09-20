@@ -59,25 +59,57 @@ export const MODELS_JSON_PATH = (IS_OMP ? ["models.yml", "models.yaml", "models.
 	.map((name) => join(AGENT_DIR, name))
 	.find(existsSync) ?? join(AGENT_DIR, IS_OMP ? "models.yml" : "models.json");
 const IS_YAML_CONFIG = /\.ya?ml$/i.test(MODELS_JSON_PATH);
+// Built-in provider ids, copied from pi-ai's getBuiltinProviders() (the
+// authoritative source — regenerate against the installed pi when updating).
+// A custom provider reusing one of these ids COLLIDES with the built-in: pi
+// merges the built-in catalog into the provider (built-in models can never be
+// removed via models.json), and auth.json is keyed by id, so /login & /logout
+// for the built-in also read/wipe the custom provider's key.
 export const BUILTIN_PROVIDER_IDS = new Set([
+	"amazon-bedrock",
+	"ant-ling",
 	"anthropic",
-	"openai",
-	"azure-openai",
-	"google",
-	"vertex",
-	"bedrock",
-	"mistral",
-	"groq",
+	"azure-openai-responses",
+	"baseten",
 	"cerebras",
-	"xai",
-	"openrouter",
-	"vercel-ai-gateway",
-	"zai",
+	"cloudflare-ai-gateway",
+	"cloudflare-workers-ai",
+	"deepseek",
+	"fireworks",
+	"github-copilot",
+	"google",
+	"google-vertex",
+	"groq",
 	"huggingface",
-	"kimi-for-coding",
+	"kimi-coding",
 	"minimax",
-	"ollama",
+	"minimax-cn",
+	"mistral",
+	"moonshotai",
+	"moonshotai-cn",
+	"nvidia",
+	"openai",
+	"openai-codex",
+	"opencode",
+	"opencode-go",
+	"openrouter",
+	"qwen-token-plan",
+	"qwen-token-plan-cn",
+	"qwen-token-plan-individual",
+	"together",
+	"vercel-ai-gateway",
+	"xai",
+	"xiaomi",
+	"xiaomi-token-plan-ams",
+	"xiaomi-token-plan-cn",
+	"xiaomi-token-plan-sgp",
+	"zai",
+	"zai-coding-cn",
 ]);
+
+// Warning text shown when a custom provider (re)uses a built-in id.
+export const BUILTIN_COLLISION_WARNING =
+	"This id matches a built-in provider. pi merges the built-in model catalog into it — built-in models stay visible even if you delete them here — and /login & /logout for this id share the same auth.json entry, so logging out wipes your key too. Consider a distinct id (e.g. suffix -relay) unless you deliberately want to extend the built-in.";
 
 function ensureConfigDir() {
 	mkdirSync(dirname(MODELS_JSON_PATH), { recursive: true });

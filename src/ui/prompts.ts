@@ -1,4 +1,4 @@
-import { BUILTIN_PROVIDER_IDS, loadModelsConfig } from "../config.ts";
+import { BUILTIN_COLLISION_WARNING, BUILTIN_PROVIDER_IDS, loadModelsConfig } from "../config.ts";
 import { describeProbeInfo, resolveModelInfo } from "model-probe";
 import { REASONING_LEVELS } from "../types.ts";
 import type { ApiKeyMode, CommandContext, ModelOptions, ProviderApi, ProviderStyle, ReasoningCeiling, SelectItem } from "../types.ts";
@@ -265,10 +265,7 @@ export async function promptProviderId(ctx: CommandContext, normalizedEndpoint: 
 		}
 
 		if (BUILTIN_PROVIDER_IDS.has(providerId)) {
-			const ok = await ctx.ui.confirm(
-				"Override built-in provider?",
-				`"${providerId}" matches a built-in provider id. Saving this will override that provider in the active models config. Continue?`,
-			);
+			const ok = await ctx.ui.confirm("Built-in id collision", `"${providerId}" — ${BUILTIN_COLLISION_WARNING}`);
 			if (!ok) continue;
 		}
 		return providerId;

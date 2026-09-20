@@ -11,7 +11,7 @@ import {
 	resolveModelInfo,
 } from "model-probe";
 import { resolveApiKeyForProbe, serializeApiKey } from "../api-key.ts";
-import { loadModelsConfig, MODELS_JSON_PATH, removeProviderApiKey, saveModelsConfig, saveProviderApiKey } from "../config.ts";
+import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, removeProviderApiKey, saveModelsConfig, saveProviderApiKey } from "../config.ts";
 import { buildModelEntry, modelIdOf, modelOptionsFromProbe, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { GatewayProbeProfile } from "../presets.ts";
@@ -100,7 +100,10 @@ export function describeProviderInline(providerId: string, provider: any): { lab
 	const modelCount = Array.isArray(provider?.models) ? provider.models.length : 0;
 	const endpoint = typeof provider?.baseUrl === "string" ? provider.baseUrl : "(no baseUrl)";
 	const api = typeof provider?.api === "string" ? provider.api : "(no api)";
-	const suffix = ` • ${api} • ${endpoint} • ${modelCount} model${modelCount === 1 ? "" : "s"}`;
+	// Flag ids that collide with pi's built-in providers — merging and shared
+	// auth surprise users otherwise (see BUILTIN_COLLISION_WARNING).
+	const collision = BUILTIN_PROVIDER_IDS.has(providerId) ? " • ⚠ built-in id" : "";
+	const suffix = ` • ${api} • ${endpoint} • ${modelCount} model${modelCount === 1 ? "" : "s"}${collision}`;
 	return {
 		label: providerId,
 		suffix,
