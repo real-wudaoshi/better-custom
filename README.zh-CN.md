@@ -127,10 +127,11 @@ Pi(官方拆分方式,和 `/login` 一致):
 把自定义 provider 命名为 pi 的内置 provider id(比如 `deepseek`、
 `openai`)**不会**覆盖内置 provider——pi 会把两者合并:内置模型目录
 始终可见,即便你在这里删掉那些模型;而 `auth.json` 以 id 为键,对内置
-provider 执行 `/login`、`/logout` 会同时读取/清掉你的 key。扩展在添加、
-重命名为、或从撞车 id 下删除模型时都会给出警告。建议使用不同的 id
-(比如加 `-relay` 后缀);如果故意保持撞车,可以用 pi-hide-providers
-的 `/hide-models` 隐藏不想看到的内置目录模型。
+provider 执行 `/login`、`/logout` 会同时读取/清掉你的 key。添加或重命名为
+撞车 id 时,扩展会提供一键改成 `<id>-custom` 的选项(故意扩展内置
+provider 时仍可保留撞车),删除模型的确认框也会标明合并行为;provider
+列表里撞车的 id 带 `⚠ built-in id` 后缀。如果故意保持撞车,可以用
+pi-hide-providers 的 `/hide-models` 隐藏不想看到的内置目录模型。
 
 OMP:provider 和密钥保持内联在 `models.yml` / `models.yaml`(已有文件
 保持原格式,新建配置为 `models.yml`)。保存 YAML 会重写格式、丢弃注释。

@@ -265,9 +265,37 @@ export async function promptProviderId(ctx: CommandContext, normalizedEndpoint: 
 		}
 
 		if (BUILTIN_PROVIDER_IDS.has(providerId)) {
-			const ok = await ctx.ui.confirm("Built-in id collision", `"${providerId}" — ${BUILTIN_COLLISION_WARNING}`);
-			if (!ok) continue;
+			const resolved = await resolveBuiltinCollision(ctx, providerId);
+			if (resolved === null) continue;
+			if (existingIds.has(resolved)) {
+				ctx.ui.notify(`Provider "${resolved}" already exists. Choose a different name.`, "warning");
+				continue;
+			}
+			return resolved;
 		}
 		return providerId;
 	}
+}
+
+// One-click way out when an id collides with a built-in provider: rename to
+// "<id>-custom", keep the collision (deliberate built-in extension), or go
+// back and pick another name. Returns the id to use, or null to re-prompt.
+export async function resolveBuiltinCollision(ctx: CommandContext, providerId: string): Promise<string | null> {
+	const suggested = `${providerId}-custom`;
+	const choice = await selectOne(ctx, `"${providerId}" collides with a built-in provider`, [
+		{
+			value: "rename",
+			label: `Use "${suggested}" instead`,
+			description: "Recommended — your models and key stay fully separate from the built-in provider",
+		},
+		{
+			value: "keep",
+			label: `Keep "${providerId}"`,
+			description: `Extend the built-in on purpose. ${BUILTIN_COLLISION_WARNING}`,
+		},
+		{ value: "back", label: "Pick another name", description: "Go back and enter a different provider name" },
+	]);
+	if (choice === "rename") return suggested;
+	if (choice === "keep") return providerId;
+	return null;
 }

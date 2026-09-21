@@ -1,6 +1,6 @@
 import { describeProbeInfo, fetchModelsDevInfoForBaseUrl, probeModels } from "model-probe";
 import { apiKeyFromProvider, resolveApiKeyForProbe } from "../api-key.ts";
-import { BUILTIN_COLLISION_WARNING, BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, renameProviderApiKey, saveModelsConfig } from "../config.ts";
+import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, renameProviderApiKey, saveModelsConfig } from "../config.ts";
 import { applyReasoning, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { CommandContext, ModelProbeInfo, ModelsConfig, ProbeResult, ProviderApi, SelectItem } from "../types.ts";
@@ -13,6 +13,7 @@ import {
 	promptMaxTokens,
 	promptReasoning,
 	promptImage,
+	resolveBuiltinCollision,
 } from "../ui/prompts.ts";
 import { buildProbeUrl, normalizeEndpoint, slugify } from "../url.ts";
 import {
@@ -211,7 +212,7 @@ async function renameProvider(ctx: CommandContext, providerId: string): Promise<
 	const input = await ctx.ui.input("Rename provider", `current: ${providerId}`);
 	if (input === undefined) return null;
 	// Slugify so names stay consistent with the Add flow.
-	const newId = slugify(input.trim());
+	let newId = slugify(input.trim());
 	if (!newId || newId === providerId) return null;
 
 	if (config.providers[newId]) {
@@ -220,8 +221,13 @@ async function renameProvider(ctx: CommandContext, providerId: string): Promise<
 	}
 
 	if (BUILTIN_PROVIDER_IDS.has(newId)) {
-		const ok = await ctx.ui.confirm("Built-in id collision", `"${newId}" — ${BUILTIN_COLLISION_WARNING}`);
-		if (!ok) return null;
+		const resolved = await resolveBuiltinCollision(ctx, newId);
+		if (resolved === null || resolved === providerId) return null;
+		if (config.providers[resolved]) {
+			ctx.ui.notify(`Provider "${resolved}" already exists. Choose a different name.`, "warning");
+			return null;
+		}
+		newId = resolved;
 	}
 
 	// Rebuild key-by-key so the renamed entry keeps its position rather than
