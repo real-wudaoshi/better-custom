@@ -108,6 +108,15 @@ YAML 子集)。
 起点。视频输入会被探测并作为选择器标签展示,但 pi 的模型配置没有 video
 字段,仅用于展示。
 
+### 价格估计
+
+当网关自身上报价格(LiteLLM 的 `input_cost_per_token` 等、OpenRouter 的
+内联 `pricing`),或模型命中 models.dev 目录条目时,扩展会把 pi 的
+`cost` 字段(每百万 token 美元价:input / output / cacheRead /
+cacheWrite)写进模型条目——和内置 provider 自带的字段一致——这样 pi 的
+用量统计也能给自定义 provider 估算会话成本。价格绝不猜测:没有本地规则,
+没有默认值。中转网关显示的价格是官方标价,可能与中转实际计费不同。
+
 ## 存储
 
 Pi(官方拆分方式,和 `/login` 一致):

@@ -110,6 +110,17 @@ defaults are starting points for new models. Video input is tracked and shown
 as a picker tag, but pi's model config has no video slot, so it is
 display-only.
 
+### Cost estimation
+
+When the gateway reports list prices (LiteLLM `input_cost_per_token` & co.,
+OpenRouter inline `pricing`) or the model matches a models.dev catalog entry,
+the extension writes pi's `cost` field (USD per 1M tokens: input / output /
+cacheRead / cacheWrite) into each model entry — the same field built-in
+providers carry — so pi's usage accounting can estimate session cost for
+custom providers too. Cost is never guessed: no local rule, no default. Prices
+for relay gateways are the maker's list prices, which may differ from what the
+relay actually bills.
+
 ## Storage
 
 Pi (official split, same as `/login`):

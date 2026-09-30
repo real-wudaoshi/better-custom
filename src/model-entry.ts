@@ -59,6 +59,7 @@ export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback
 		image: info.image ?? fallback.image,
 		contextWindow: info.contextWindow ?? fallback.contextWindow,
 		maxTokens: info.maxTokens ?? fallback.maxTokens,
+		cost: info.cost ?? fallback.cost,
 	};
 
 	if (info.reasoning === false) {
@@ -124,6 +125,12 @@ export function buildModelEntry(
 	}
 	if (typeof opts.maxTokens === "number" && opts.maxTokens > 0) {
 		entry.maxTokens = opts.maxTokens;
+	}
+
+	// List prices so pi's usage accounting can estimate cost for custom
+	// providers too. Only real sources (gateway-reported or models.dev).
+	if (opts.cost) {
+		entry.cost = opts.cost;
 	}
 
 	if (opts.thinkingLevelMap) {

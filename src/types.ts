@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ModelCostInfo } from "model-probe";
 
 export type ProviderApi = "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai";
 export type ProviderStyle = "openai" | "openai-responses" | "anthropic" | "ollama" | "gemini";
@@ -15,6 +16,9 @@ export type ModelOptions = {
 	image: boolean;
 	contextWindow?: number;
 	maxTokens?: number;
+	// USD per 1M tokens, from the gateway or the models.dev catalog. Only real
+	// sources — never guessed.
+	cost?: ModelCostInfo;
 	// When set, written verbatim instead of deriving a map from the ceiling. Used
 	// when a probe learned the provider's exact thinking levels (effort options).
 	thinkingLevelMap?: Record<string, string | null>;
@@ -23,7 +27,7 @@ export type ModelOptions = {
 // Model metadata types come from the model-probe package (probing logic was
 // extracted there); re-exported here so the rest of the extension has one
 // place to import from.
-export type { ModelProbeInfo, ProbeResult } from "model-probe";
+export type { ModelCostInfo, ModelProbeInfo, ProbeResult } from "model-probe";
 
 export type ModelsConfig = {
 	providers?: Record<string, any>;

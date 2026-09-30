@@ -446,14 +446,14 @@ async function editModelOverride(ctx: CommandContext, providerId: string, modelI
 // detected from the gateway or the models.dev catalog count as authoritative
 // — local-rule guesses, api-fallback and built-in defaults never rewrite an
 // existing entry.
-const DIFFABLE_FIELDS = ["contextWindow", "maxTokens", "image", "reasoning"] as const;
+const DIFFABLE_FIELDS = ["contextWindow", "maxTokens", "image", "reasoning", "cost"] as const;
 type DiffableField = (typeof DIFFABLE_FIELDS)[number];
 type MetaChange = { field: DiffableField; label: string };
 
 // Compare a stored model entry against freshly resolved probe info. Returns
 // the authoritative differences, rendered as `context 128000→1000000` /
-// `max-out 8192→32000` for numeric fields and `image [+]` / `reasoning [-]`
-// for boolean fields.
+// `max-out 8192→32000` / `cost $1.32/$3.96→$0.44/$0.87` (input/output per 1M)
+// for numeric fields and `image [+]` / `reasoning [-]` for boolean fields.
 function diffStoredModel(model: any, info: ModelProbeInfo): MetaChange[] {
 	const guessed = new Set<string>([...(info.inferredFields ?? []), ...(info.defaultedFields ?? [])]);
 	const changes: MetaChange[] = [];
@@ -469,6 +469,18 @@ function diffStoredModel(model: any, info: ModelProbeInfo): MetaChange[] {
 		} else if (field === "image") {
 			const old = Array.isArray(model?.input) ? model.input.includes("image") : true;
 			if (old !== value) changes.push({ field, label: `image [${value ? "+" : "-"}]` });
+		} else if (field === "cost") {
+			const old = model?.cost && typeof model.cost === "object" ? model.cost : undefined;
+			const same =
+				old !== undefined &&
+				old.input === value.input &&
+				old.output === value.output &&
+				(old.cacheRead ?? 0) === value.cacheRead &&
+				(old.cacheWrite ?? 0) === value.cacheWrite;
+			if (!same) {
+				const oldLabel = old ? `$${old.input}/$${old.output}` : "unset";
+				changes.push({ field, label: `cost ${oldLabel}→$${value.input}/$${value.output}` });
+			}
 		} else {
 			const old = model?.reasoning === true;
 			if (old !== value) changes.push({ field, label: `reasoning [${value ? "+" : "-"}]` });
@@ -483,6 +495,7 @@ function applyMetaChanges(entry: any, info: ModelProbeInfo, changes: MetaChange[
 		if (change.field === "contextWindow") entry.contextWindow = info.contextWindow;
 		else if (change.field === "maxTokens") entry.maxTokens = info.maxTokens;
 		else if (change.field === "image") entry.input = info.image ? ["text", "image"] : ["text"];
+		else if (change.field === "cost") entry.cost = info.cost;
 		else applyReasoning(entry, info.reasoning ? "xhigh" : "off");
 	}
 }
@@ -495,6 +508,7 @@ function storedModelSummary(model: any): string {
 	if (Array.isArray(model?.input) && model.input.includes("image")) details.push("image");
 	if (typeof model?.contextWindow === "number") details.push(`context ${model.contextWindow}`);
 	if (typeof model?.maxTokens === "number") details.push(`max-out ${model.maxTokens}`);
+	if (model?.cost && typeof model.cost === "object") details.push(`$${model.cost.input}/$${model.cost.output} per 1M`);
 	return details.join(" • ");
 }
 

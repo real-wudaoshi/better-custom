@@ -127,6 +127,7 @@ export function providerModelItems(provider: any): SelectItem[] {
 				if (Array.isArray(model.input) && model.input.includes("image")) details.push("image");
 				if (typeof model.contextWindow === "number") details.push(`context ${model.contextWindow}`);
 				if (typeof model.maxTokens === "number") details.push(`max-out ${model.maxTokens}`);
+				if (model.cost && typeof model.cost === "object") details.push(`$${model.cost.input}/$${model.cost.output} per 1M`);
 			}
 
 			return {
