@@ -2,188 +2,114 @@
 
 [中文文档](README.zh-CN.md)
 
-A better way to manage custom providers for Pi and Oh My Pi (OMP).
-
-An interactive wizard (`/custom-provider`) that adds, edits, and deletes custom
-LLM providers — no hand-editing of config files required.
-
-## Features
-
-- **Add from the [models.dev](https://models.dev) catalog** — pick a known API
-  site (OpenRouter, DeepSeek, Groq, xAI, ...); base URL, model list, and
-  metadata all come from the catalog (official SDK, with a jsDelivr freshness
-  layer and a bundled offline snapshot). No probing at all.
-- **Add any custom endpoint** — OpenAI Chat Completions, OpenAI Responses,
-  Anthropic Messages, Gemini, or Ollama. Auto-detect probes `/models` and every
-  known metadata source, or enter models by hand (one id at a time, with a
-  per-model metadata menu pre-filled from the resolved values).
-- **Automatic metadata detection** — context window, max output tokens,
-  image/video input, reasoning support and levels, learned from the gateway
-  itself (LiteLLM `/model/info` + `/model_group/info`, site public catalogs,
-  OpenAI `GET /models/{id}`, inline list metadata, Ollama native API) and from
-  models.dev. See [How metadata is resolved](#how-metadata-is-resolved).
-- **Re-probe to reconcile** — query `/models` again and review everything in
-  one tri-state list: new models, metadata updates (`context 128000 ->
-  1000000`, `image [+]`, `max-out 8192 -> 32000`), and vanished models flagged
-  `unsupported`. `[x]` apply, `[-]` keep stored metadata, `[ ]` remove/skip.
-- **Edit everything afterwards** — per-model fields (reasoning ceiling, image
-  input, context window, max output tokens, headers/endpoint override), bulk
-  model delete, provider API flavor, endpoint, rename, delete.
-- **Sensible, honest defaults** — detected values win; guesses are tagged
-  (`[models.dev]` / `[local rules]`) in the picker; default-filled values are
-  not shown at all. Degenerate catalog limits (`maxTokens == contextWindow`)
-  are clamped automatically.
-- **Developer-role probe** — endpoints that reject the OpenAI `developer` role
-  (e.g. Kimi's subscription endpoint) get `compat.supportsDeveloperRole: false`
-  automatically, so pi keeps sending `system` instead of failing with a 400.
-- **Official-style storage** — API keys go to `~/.pi/agent/auth.json` (the same
-  file `/login` writes), model declarations to `models.json`. Legacy inline
-  `apiKey` entries migrate automatically. See [Storage](#storage).
-- **Reasoning levels done right** — when the probe learns the provider's exact
-  effort options, the wizard writes a matching `thinkingLevelMap`; new models
-  default to reasoning on at the `xhigh` ceiling.
-- **Path-adaptive probing** — if `/models` doesn't answer on the given base,
-  the `/v1` variant is tried automatically; non-local `http://` falls back to
-  `https://`. On failure you can retry or switch to manual entry.
+Add, edit and delete custom LLM providers in [pi](https://pi.dev) without
+hand-editing config files. One command — `/custom-provider` — gives you the
+provider list, the model list, and everything pi needs to know about each
+model (context window, output cap, image input, reasoning, prices).
 
 ## Install
 
 ```bash
-pi install npm:better-custom-provider        # from npm
-pi install https://github.com/real-wudaoshi/better-custom   # from GitHub
-pi install /path/to/better-custom            # from a local checkout
+pi install npm:better-custom-provider                          # from npm
+pi install https://github.com/real-wudaoshi/better-custom      # from GitHub
+pi install /path/to/better-custom                              # local checkout
 ```
 
-Prefer `pi install` over copying the folder into `~/.pi/agent/extensions/`
-manually: `pi install` runs `npm install`, so the runtime dependencies
-(`model-probe`, `yaml`) are present. A manual copy still starts, but YAML
-configs degrade to JSON (a valid YAML subset).
+Use `pi install` rather than copying the folder into
+`~/.pi/agent/extensions/`: it runs `npm install` for the runtime dependencies.
 
-## Usage
+## Quick start
 
-Run `/custom-provider` in pi, then choose **Add provider**, **Edit provider**,
-or **Delete provider**.
+Run `/custom-provider` in pi and pick one of three actions.
 
-### Add
+### Add a known provider (recommended)
 
-1. **From models.dev catalog** — pick a provider, name it, enter the API key
-   (or none), multi-select models. Metadata comes from the catalog, and the
-   provider keeps tracking it (see below).
-2. **Custom endpoint** — pick the provider style, enter the endpoint URL, name
-   it, enter the API key, then:
-   - **Auto-detect from the endpoint** — probe `/models` + metadata sources,
-     multi-select models with metadata shown inline; or
-   - **Add manually** — type an id, adjust its metadata menu (reasoning / image
-     / context window / max output), confirm, next id; blank or esc finishes.
+**Add provider → From models.dev catalog** — pick a site (OpenRouter, DeepSeek,
+Groq, xAI, Z.ai, ...), give it a name, paste an API key, select the models you
+want. Endpoint, model ids, metadata and prices all come from the
+[models.dev](https://models.dev) catalog; nothing is probed. The provider keeps
+tracking that catalog afterwards, so new models appear on their own.
 
-Model pickers: type to filter, `space` toggles one row, `a` selects everything
-the filter currently shows, `n` clears the whole selection, `enter` confirms
-(nothing is written before that), `esc` cancels.
+### Add your own endpoint
 
-### Edit
+**Add provider → Custom endpoint** — choose the API flavor (Chat Completions,
+Responses, Anthropic Messages, Gemini, Ollama), enter the URL, name it, paste a
+key, then either:
 
-Pick a provider, then: **Re-probe for models** (reconcile as above),
-**Edit per model**, **Delete models**, **Add models manually**, **API flavor**,
-**Endpoint**, **Rename provider**, or **Delete provider**.
+- **Auto-detect from the endpoint** — probes `/models` plus the gateway's own
+  metadata endpoints and shows every model with its metadata; or
+- **Add manually** — type ids one at a time, each with an optional metadata menu.
 
-Per-model edits change one field in place — untouched fields (cost, headers,
-overrides) are preserved.
+Model pickers: type to filter, `space` toggles a row, `a` takes everything the
+filter shows, `n` clears the selection, `enter` confirms, `esc` cancels.
 
-### Catalog providers track models.dev
+### Edit / delete
 
-Providers added from the models.dev catalog are not a one-time copy: they
-mirror that catalog, with no switch to flip. At every session start — in the
-background, so startup never waits on it — the extension:
+**Edit provider** gives you re-probe, per-model edits (reasoning ceiling, image
+input, context window, max output, headers/endpoint override), bulk model
+delete, API flavor, endpoint, rename, and delete. **Delete provider** removes a
+provider outright.
 
-- adds models the catalog published since, so new releases show up in `/model`
-  without any action;
-- refreshes the catalog's authoritative fields (context window, max output,
-  image input, reasoning, prices) on the models you already have;
-- removes models the catalog itself dropped.
+**Re-probe for models** re-reads `/models` and puts everything in one list:
+new models, metadata changes (`context 128000→1000000`, `image [+]`), and
+models that vanished (`unsupported`). `[x]` apply, `[-]` keep stored values,
+`[ ]` remove/skip.
 
-Nothing comes back that you got rid of: models you deselected while adding the
-provider, and models you delete afterwards, are recorded as suppressed.
-Hand-added models on that provider are never touched. Providers you added as a
-custom endpoint do not track anything. Sync failures (offline, catalog down)
-are silent and retried next session.
+## What gets filled in for you
 
-The mirror state lives in `custom-provider-sync.json`; the models themselves
-stay in `models.json`. Removing a provider's entry there (or the file) makes it
-a plain static provider again.
+Each model field is resolved from the best source available, highest first:
 
-## How metadata is resolved
-
-Every field is resolved in tiers, highest priority first:
-
-1. **Detected** — real data from the gateway: LiteLLM `/model/info` and
-   `/model_group/info`, New API-style `GET {site}/api/models/public` (no auth),
-   OpenAI `GET /models/{id}` (incl. `capabilities.reasoning.effort_options`),
-   inline `/models` list metadata (OpenRouter, One API / New API `meta` fields
-   and `supported_endpoint_types`), Gemini `inputTokenLimit`, Ollama
-   `/api/tags` + `/api/show`.
-2. **models.dev** — exact per-model catalog entries, tagged `[models.dev]`.
+1. **The gateway itself** — LiteLLM `/model/info`, New API public catalogs,
+   OpenAI `GET /models/{id}`, inline `/models` metadata, Gemini, Ollama.
+2. **models.dev** — exact per-model catalog entries (tagged `[models.dev]`).
 3. **Local rules** — a built-in known-model table (OpenAI, Anthropic, DeepSeek,
-   Qwen, Kimi, GLM, Gemini, ...), tagged `[local rules]`. Ids are normalized
-   first, so relay-decorated ids (`bailian/deepseek-v4-pro`, `gpt-5@20250807`,
-   `claude-sonnet-4-6[1m]`) still match. Extend it via
-   `~/.model-probe-rules.json` (see
-   [model-probe](https://github.com/real-wudaoshi/model-probe#custom-rules)).
-4. **API fallback** — protocol-level limits (anthropic 200K/32K, google 1M/64K,
-   openai 258K/32K) when nothing else knows them.
-5. **Defaults** — `image: false`, `video: false`, `reasoning: true`.
+   Qwen, Kimi, GLM, Gemini, ...), tagged `[local rules]`. Relay-decorated ids
+   like `bailian/deepseek-v4-pro` still match. Extend it with
+   `~/.model-probe-rules.json` (see [model-probe](https://github.com/real-wudaoshi/model-probe#custom-rules)).
+4. **Protocol defaults** — reasonable limits per API flavor when nothing else
+   knows them (hidden from the UI, since they're guesses).
 
-Only tiers 1–2 ever rewrite an existing entry during re-probe; guesses and
-defaults are starting points for new models. Video input is tracked and shown
-as a picker tag, but pi's model config has no video slot, so it is
-display-only.
+Prices come from the gateway or models.dev only — never guessed — so pi can
+show session cost for custom providers too. Relay prices are the maker's list
+price and may differ from what the relay bills.
 
-### Cost estimation
+Endpoints that reject the OpenAI `developer` role are detected once and get
+`compat.supportsDeveloperRole: false`, so pi sends `system` instead of failing.
 
-When the gateway reports list prices (LiteLLM `input_cost_per_token` & co.,
-OpenRouter inline `pricing`) or the model matches a models.dev catalog entry,
-the extension writes pi's `cost` field (USD per 1M tokens: input / output /
-cacheRead / cacheWrite) into each model entry — the same field built-in
-providers carry — so pi's usage accounting can estimate session cost for
-custom providers too. Cost is never guessed: no local rule, no default. Prices
-for relay gateways are the maker's list prices, which may differ from what the
-relay actually bills.
+## Where providers are stored
 
-## Storage
+Everything lives in pi's agent directory (`~/.pi/agent/`):
 
-Pi (official split, same as `/login`):
+| File | Contents |
+| --- | --- |
+| `models.json` | Provider declarations: `baseUrl`, `api`, `compat`, and the model list with each model's metadata. This is what pi reads. |
+| `auth.json` | API keys, keyed by provider id — the same file `/login` writes, never duplicated into `models.json`. Deleting a provider removes its entry; renaming moves it. |
+| `custom-provider-sync.json` | Which providers track models.dev, which model ids that mirror owns, and which the user suppressed. Only bookkeeping — models themselves stay in `models.json`. |
 
-- `~/.pi/agent/auth.json` — credentials, keyed by provider id
-  (`{"type": "api_key", "key": ...}`); `$ENV` / `!command` references work.
-  pi resolves them for any provider id automatically. Selecting "none" writes
-  a `"dummy"` / `"ollama"` placeholder so the provider still loads.
-- `~/.pi/agent/models.json` — provider declarations (baseUrl, api, compat,
-  models). pi only loads custom providers from `models.json`;
-  `models-store.json` is pi's internal catalog cache for built-in providers
-  and is not a place for custom models.
-- Legacy inline `apiKey` entries migrate to `auth.json` on the next save;
-  deleting a provider removes its `auth.json` entry, renaming moves it.
-- `~/.pi/agent/custom-provider-sync.json` — auto-update mirror state: which
-  catalog provider each mirrored provider tracks, which model ids the mirror
-  owns, and which ids the user suppressed. Deleting an entry (or the whole
-  file) simply stops the mirror; the models stay in `models.json`.
+Providers added from the models.dev catalog keep mirroring it: at each session
+start (in the background, never blocking startup) new catalog models are added,
+metadata and prices are refreshed, and models the catalog dropped are removed.
+Models you deselected or deleted are never re-added, and hand-added models are
+left alone. Delete a provider's entry from `custom-provider-sync.json` (or the
+whole file) to freeze it into a plain static provider.
 
-### Built-in id collision
+OMP keeps providers and keys inline in `models.yml` / `models.yaml` instead.
+Saving YAML rewrites formatting and drops comments.
 
-Naming a custom provider after one of pi's built-in provider ids (e.g.
-`deepseek`, `openai`) does **not** replace the built-in — pi merges the two:
-the built-in model catalog stays visible even if you delete those models here,
-and `auth.json` is keyed by id, so `/login` and `/logout` for the built-in
-also read/wipe your key. When you add or rename a provider to a colliding id
-the extension offers a one-click rename to `<id>-custom` (keeping the
-collision stays possible for deliberate built-in extension), and delete-model
-confirms flag the merge behavior. Provider lists mark colliding ids with a
-`⚠ built-in id` suffix. If you keep the collision on purpose, use
-`/hide-models` (pi-hide-providers) to hide built-in catalog entries you don't
-want.
+`models-store.json` is pi's own cache for built-in providers — custom models do
+not belong there and this extension never writes to it.
 
-OMP: providers and keys stay in `models.yml` / `models.yaml` (existing files
-keep their format; a fresh config is created as `models.yml`). Saving YAML
-rewrites formatting and drops comments.
+## Things to know
+
+- **Don't reuse a built-in provider id.** Naming your provider `deepseek` or
+  `openai` does not replace the built-in: pi merges both, so built-in models
+  stay visible even after you delete them, and `auth.json` is keyed by id, so
+  `/login` / `/logout` for the built-in also touch your key. The wizard offers
+  a one-click rename to `<id>-custom` when it notices, and marks colliding ids
+  with `⚠ built-in id`.
+- **Offline is fine.** Probing, catalog lookups and the background sync all
+  fail soft — you can add models by hand with no network at all.
+- **Keys are write-only.** Stored keys are never read back into a prompt.
 
 ## Development
 
@@ -191,13 +117,11 @@ Plain TypeScript loaded directly by pi — no build step. Probing lives in the
 separate [model-probe](https://github.com/real-wudaoshi/model-probe) package.
 
 ```bash
-npm run check   # syntax-check every source file with node --check
+npm run check   # syntax-check every source file
 ```
 
-Layout: `index.ts` (command entry) · `src/flows/` (add / edit / delete /
-shared) · `src/ui/` (pickers, prompts) · `src/config.ts` (models.json +
-auth.json I/O, migration) · `src/model-entry.ts` (model/provider config
-builders) · `src/api-key.ts`, `src/url.ts`, `src/presets.ts` (helpers).
+See [model-probe](https://github.com/real-wudaoshi/model-probe) for the probing
+layer itself (usable as a CLI: `model-probe https://your-gateway/v1`).
 
 ## License
 

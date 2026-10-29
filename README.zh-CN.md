@@ -2,188 +2,116 @@
 
 [English](README.md)
 
-为 Pi 和 Oh My Pi (OMP) 管理自定义 provider 的更好方式。
-
-一个交互式向导(`/custom-provider`),用于添加、编辑、删除自定义 LLM
-provider——无需手工编辑配置文件。
-
-## 功能特性
-
-- **从 [models.dev](https://models.dev) 目录添加** —— 直接挑选已知 API
-  站点(OpenRouter、DeepSeek、Groq、xAI 等);base URL、模型列表、元数据
-  全部来自目录(官方 SDK,带 jsDelivr 保鲜层和内置离线快照),完全不探测。
-- **添加任意自定义端点** —— 支持 OpenAI Chat Completions、OpenAI
-  Responses、Anthropic Messages、Gemini、Ollama。自动探测会查询 `/models`
-  和所有已知元数据来源;也可以手动输入(逐个模型,进入各自的元数据菜单,
-  各项以解析结果为起点)。
-- **自动检测模型元数据** —— 上下文窗口、最大输出 token、image/video 输入、
-  reasoning 支持/档位,直接从网关本身(LiteLLM `/model/info` +
-  `/model_group/info`、站点公开目录、OpenAI `GET /models/{id}`、列表内联
-  元数据、Ollama 原生 API)和 models.dev 学习。见
-  [元数据如何解析](#元数据如何解析)。
-- **重新探测并对账** —— 再次查询 `/models`,在一个三态列表里统一处理:
-  新模型、元数据更新(`context 128000 -> 1000000`、`image [+]`、
-  `max-out 8192 -> 32000`)、端点不再返回的模型(标记 `unsupported`)。
-  `[x]` 应用、`[-]` 保留已存元数据、`[ ]` 移除/跳过。
-- **事后一切可改** —— 逐模型字段(reasoning 上限、图像输入、上下文窗口、
-  最大输出 token、headers/端点覆盖)、批量删除模型、provider 的 API
-  flavor、端点、重命名、删除。
-- **合理且诚实的默认值** —— 实测值优先;推测值在选择器中带标记
-  (`[models.dev]` / `[local rules]`);默认值填充的项不显示。目录里的
-  退化数据(`maxTokens == contextWindow`)会自动钳制。
-- **developer role 探测** —— 拒绝 OpenAI `developer` 角色的端点(比如
-  Kimi 订阅端点)会自动写入 `compat.supportsDeveloperRole: false`,pi 就会
-  继续发 `system` 而不是报 400。
-- **官方风格的存储** —— API key 写入 `~/.pi/agent/auth.json`(就是
-  `/login` 写的那个文件),模型声明写入 `models.json`。旧版内联的
-  `apiKey` 自动迁移。见[存储](#存储)。
-- **正确处理 reasoning 档位** —— 探测到 provider 的 effort 选项时,向导
-  会写入完全匹配的 `thinkingLevelMap`;新模型默认开启 reasoning,上限
-  `xhigh`。
-- **路径自适应探测** —— `/models` 在给定 base 上没响应时自动尝试加/去
-  `/v1` 的变体;非本地 `http://` 自动回退 `https://`。失败后可以重试或改
-  手动输入。
+在 [pi](https://pi.dev) 里添加、编辑、删除自定义 LLM provider,不用手改配置
+文件。一个命令 `/custom-provider` 就能管好 provider 列表、模型列表,以及 pi
+需要知道的每个模型信息(上下文窗口、输出上限、图像输入、reasoning、价格)。
 
 ## 安装
 
 ```bash
-pi install npm:better-custom-provider        # 从 npm
-pi install https://github.com/real-wudaoshi/better-custom   # 从 GitHub
-pi install /path/to/better-custom            # 从本地检出
+pi install npm:better-custom-provider                          # 从 npm
+pi install https://github.com/real-wudaoshi/better-custom      # 从 GitHub
+pi install /path/to/better-custom                              # 本地目录
 ```
 
-建议用 `pi install`,而不是手动把文件夹复制到 `~/.pi/agent/extensions/`:
-`pi install` 会执行 `npm install`,运行时依赖(`model-probe`、`yaml`)
-才会装好。手动复制也能启动,但 YAML 配置会退化为 JSON(JSON 是合法的
-YAML 子集)。
+建议用 `pi install` 而不是把目录拷进 `~/.pi/agent/extensions/`——它会顺带
+`npm install` 运行时依赖。
 
-## 使用方法
+## 快速上手
 
-在 pi 中运行 `/custom-provider`,然后选择 **添加 provider**、
-**编辑 provider** 或 **删除 provider**。
+在 pi 里运行 `/custom-provider`,然后三选一。
 
-### 添加
+### 添加已知 provider(推荐)
 
-1. **从 models.dev 目录添加** —— 挑选 provider、命名、输入 API key(或
-   选 none)、多选模型。元数据全部来自目录,并且该 provider 会持续跟踪
-   目录(见下文)。
-2. **自定义端点** —— 选择 provider 类型,输入端点地址、名称、API key,
-   然后:
-   - **自动探测** —— 探测 `/models` + 元数据来源,多选模型并内联显示
-     元数据;或
-   - **手动添加** —— 输入 id,进入该模型的元数据菜单(reasoning / 图像
-     输入 / 上下文窗口 / 最大输出 token),确认后输入下一个 id;留空或
-     esc 结束。
+**Add provider → From models.dev catalog** —— 挑一个站点(OpenRouter、
+DeepSeek、Groq、xAI、Z.ai……),起个名字,粘贴 API key,勾选想要的模型。
+端点、模型 id、元数据和价格全部来自 [models.dev](https://models.dev) 目录,
+完全不探测。加完之后该 provider 会持续跟踪目录,新模型自动出现。
+
+### 添加自己的端点
+
+**Add provider → Custom endpoint** —— 选择 API 类型(Chat Completions、
+Responses、Anthropic Messages、Gemini、Ollama),输入 URL、命名、粘贴 key,
+然后二选一:
+
+- **Auto-detect from the endpoint** —— 探测 `/models` 和网关自带的元数据
+  接口,列出所有模型并显示元数据;或
+- **Add manually** —— 逐个输入 id,每个可进元数据菜单细调。
 
 模型选择器:直接输入即过滤,`space` 切换单行,`a` 选中当前过滤出的全部,
-`n` 清空整个选择,`enter` 确认(在此之前不会写入任何东西),`esc` 取消。
+`n` 清空选择,`enter` 确认,`esc` 取消。
 
-### 编辑
+### 编辑 / 删除
 
-选择一个 provider,然后:**重新探测模型**(如上对账)、**逐模型编辑**、
-**删除模型**(批量)、**手动添加模型**、**API flavor**、**Endpoint**、
-**重命名 provider**、**删除 provider**。
+**Edit provider** 里可以:重新探测、逐模型编辑(reasoning 档位、图像输入、
+上下文窗口、最大输出、headers/端点覆盖)、批量删除模型、改 API 类型、改端点、
+重命名、删除。**Delete provider** 直接删掉整个 provider。
 
-逐模型编辑只原地修改单个字段——未触碰的字段(cost、headers、覆盖项)
-都会保留。
+**Re-probe for models** 会重新读一次 `/models` 并把所有情况放进一个列表:
+新模型、元数据变化(`context 128000→1000000`、`image [+]`)、以及消失的模型
+(标 `unsupported`)。`[x]` 应用,`[-]` 保留原值,`[ ]` 删除/跳过。
 
-### 目录 provider 自动跟踪 models.dev
+## 会自动填好什么
 
-从 models.dev 目录添加的 provider 不是一次性拷贝,而是持续镜像该目录,
-没有开关。每次会话启动时(后台异步,启动不等它),扩展会:
+每个字段按可用的最佳来源解析,优先级从高到低:
 
-- 添加目录里新发布的模型——新模型无需任何操作就出现在 `/model`;
-- 刷新已有模型上目录给出的权威字段(上下文窗口、最大输出、图像输入、
-  reasoning、价格);
-- 移除目录本身已下架的模型。
-
-你删掉的不会复活:添加时没勾选的模型、以及之后删除的模型都会记为
-抑制项。该 provider 下手动添加的模型完全不受影响。以自定义端点方式
-添加的 provider 不参与任何跟踪。同步失败(离线、目录不可达)不会打扰你,
-下次会话再试。
-
-镜像状态存在 `custom-provider-sync.json`,模型本身仍存在 `models.json`。
-删掉某个 provider 的条目(或整个文件),它就退回普通静态 provider。
-
-## 元数据如何解析
-
-每个字段按优先级分层解析:
-
-1. **实测** —— 来自网关的真实数据:LiteLLM `/model/info` 和
-   `/model_group/info`、New API 风格的 `GET {site}/api/models/public`(免鉴权)、
-   OpenAI `GET /models/{id}`(含 `capabilities.reasoning.effort_options`)、
-   `/models` 列表内联元数据(OpenRouter、One API / New API 的 `meta` 字段
-   和 `supported_endpoint_types`)、Gemini 的 `inputTokenLimit`、Ollama 的
-   `/api/tags` + `/api/show`。
-2. **models.dev** —— 精确到单个模型的目录条目,标记 `[models.dev]`。
+1. **网关自身** —— LiteLLM `/model/info`、New API 公共目录、
+   OpenAI `GET /models/{id}`、`/models` 内联元数据、Gemini、Ollama。
+2. **models.dev** —— 精确的逐模型目录条目,标记 `[models.dev]`。
 3. **本地规则** —— 内置知名模型表(OpenAI、Anthropic、DeepSeek、Qwen、
-   Kimi、GLM、Gemini 等),标记 `[local rules]`。匹配前会先归一化 id,
-   所以中转装饰过的 id(`bailian/deepseek-v4-pro`、`gpt-5@20250807`、
-   `claude-sonnet-4-6[1m]`)也能命中。可通过 `~/.model-probe-rules.json`
-   扩展(见
-   [model-probe](https://github.com/real-wudaoshi/model-probe#custom-rules))。
-4. **协议兜底** —— 其他来源都不知道时,按协议给限制值(anthropic
-   200K/32K、google 1M/64K、openai 258K/32K)。
-5. **默认值** —— `image: false`、`video: false`、`reasoning: true`。
+   Kimi、GLM、Gemini 等),标记 `[local rules]`。中转装饰过的 id(如
+   `bailian/deepseek-v4-pro`)也能匹配。可用 `~/.model-probe-rules.json`
+   扩展(见 [model-probe](https://github.com/real-wudaoshi/model-probe#custom-rules))。
+4. **协议默认值** —— 其他来源都不知道时按 API 类型给的合理限制(界面上
+   不显示,因为是猜的)。
 
-重新探测时只有第 1–2 层的值会改写已有配置;推测值和默认值只是新模型的
-起点。视频输入会被探测并作为选择器标签展示,但 pi 的模型配置没有 video
-字段,仅用于展示。
+价格只来自网关或 models.dev,**绝不猜测**,这样 pi 也能给自定义 provider
+估算会话成本。中转显示的是厂商官方标价,可能与实际计费不同。
 
-### 价格估计
+拒绝 OpenAI `developer` 角色的端点会被探测一次并写入
+`compat.supportsDeveloperRole: false`,pi 就会改发 `system` 而不是报错。
 
-当网关自身上报价格(LiteLLM 的 `input_cost_per_token` 等、OpenRouter 的
-内联 `pricing`),或模型命中 models.dev 目录条目时,扩展会把 pi 的
-`cost` 字段(每百万 token 美元价:input / output / cacheRead /
-cacheWrite)写进模型条目——和内置 provider 自带的字段一致——这样 pi 的
-用量统计也能给自定义 provider 估算会话成本。价格绝不猜测:没有本地规则,
-没有默认值。中转网关显示的价格是官方标价,可能与中转实际计费不同。
+## provider 存在哪里
 
-## 存储
+全部在 pi 的 agent 目录(`~/.pi/agent/`)下:
 
-Pi(官方拆分方式,和 `/login` 一致):
+| 文件 | 内容 |
+| --- | --- |
+| `models.json` | provider 声明:`baseUrl`、`api`、`compat`,以及模型列表和各模型元数据。pi 读的是这个文件。 |
+| `auth.json` | API key,以 provider id 为键——和 `/login` 写的是同一个文件,不会重复写进 `models.json`。删除 provider 会删掉对应条目,重命名会迁移。 |
+| `custom-provider-sync.json` | 哪些 provider 在跟踪 models.dev、镜像拥有哪些模型 id、哪些被用户抑制。只是记账,模型本身仍在 `models.json`。 |
 
-- `~/.pi/agent/auth.json` —— 凭证,以 provider id 为键
-  (`{"type": "api_key", "key": ...}`);`$ENV` / `!command` 引用有效。
-  pi 对任意 provider id 都会自动解析。选择 none 会写入 `"dummy"` /
-  `"ollama"` 占位符,provider 仍可正常加载。
-- `~/.pi/agent/models.json` —— provider 声明(baseUrl、api、compat、
-  models)。pi 只从 `models.json` 加载自定义 provider;`models-store.json`
-  是 pi 内部给内置 provider 用的目录缓存,不适合存放自定义模型。
-- 旧版内联的 `apiKey` 会在下次保存时自动迁移到 `auth.json`;删除
-  provider 会一并删除其 `auth.json` 条目,重命名会同步迁移。
-- `~/.pi/agent/custom-provider-sync.json` —— 自动更新镜像状态:每个被
-  镜像的 provider 跟踪哪个目录 provider、镜像拥有哪些模型 id、哪些 id
-  被用户抑制。删掉某条目(或整个文件)只是停止镜像,模型仍留在
-  `models.json` 里。
+从 models.dev 目录添加的 provider 会持续镜像该目录:每次会话启动时
+(后台进行,不阻塞启动)添加目录里新发布的模型、刷新元数据和价格、移除
+目录已下架的模型。你没勾选或后来删掉的模型不会被加回来,手动添加的模型
+也不受影响。想让它变回普通静态 provider,把 `custom-provider-sync.json`
+里对应条目(或整个文件)删掉即可。
 
-### 内置 id 撞车
+OMP 则把 provider 和密钥内联存在 `models.yml` / `models.yaml` 里。保存 YAML
+会重写格式并丢弃注释。
 
-把自定义 provider 命名为 pi 的内置 provider id(比如 `deepseek`、
-`openai`)**不会**覆盖内置 provider——pi 会把两者合并:内置模型目录
-始终可见,即便你在这里删掉那些模型;而 `auth.json` 以 id 为键,对内置
-provider 执行 `/login`、`/logout` 会同时读取/清掉你的 key。添加或重命名为
-撞车 id 时,扩展会提供一键改成 `<id>-custom` 的选项(故意扩展内置
-provider 时仍可保留撞车),删除模型的确认框也会标明合并行为;provider
-列表里撞车的 id 带 `⚠ built-in id` 后缀。如果故意保持撞车,可以用
-pi-hide-providers 的 `/hide-models` 隐藏不想看到的内置目录模型。
+`models-store.json` 是 pi 给内置 provider 用的缓存,自定义模型不该放在那里,
+本扩展也不会写它。
 
-OMP:provider 和密钥保持内联在 `models.yml` / `models.yaml`(已有文件
-保持原格式,新建配置为 `models.yml`)。保存 YAML 会重写格式、丢弃注释。
+## 注意事项
+
+- **别复用内置 provider id。** 把 provider 命名成 `deepseek`、`openai`
+  并不会替换内置的:pi 会把两者合并,内置模型即使你删了也仍然可见;而且
+  `auth.json` 以 id 为键,对内置 provider 执行 `/login` / `/logout` 会连你的
+  key 一起动。向导发现撞车时会提供一键改名为 `<id>-custom`,并在列表里标
+  `⚠ built-in id`。
+- **离线也能用。** 探测、目录查询、后台同步失败都不会打断你,完全断网时
+  仍然可以手动添加模型。
+- **密钥只写不可读。** 已保存的 key 不会被读回输入框。
 
 ## 开发
 
-纯 TypeScript,由 pi 直接加载,无需构建步骤。探测逻辑在独立的
+纯 TypeScript,由 pi 直接加载,无需构建。探测逻辑在独立的
 [model-probe](https://github.com/real-wudaoshi/model-probe) 包里。
 
 ```bash
-npm run check   # 用 node --check 对每个源文件做语法检查
+npm run check   # 对所有源文件做语法检查
 ```
-
-结构:`index.ts`(命令入口)· `src/flows/`(add / edit / delete /
-shared)· `src/ui/`(选择器、提示)· `src/config.ts`(models.json +
-auth.json 读写、迁移)· `src/model-entry.ts`(模型/provider 配置构建)·
-`src/api-key.ts`、`src/url.ts`、`src/presets.ts`(辅助)。
 
 ## 许可证
 
