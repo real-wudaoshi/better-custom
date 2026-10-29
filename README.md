@@ -78,11 +78,31 @@ or **Delete provider**.
 ### Edit
 
 Pick a provider, then: **Re-probe for models** (reconcile as above),
-**Edit per model**, **Delete models**, **Add models manually**, **API flavor**,
-**Endpoint**, **Rename provider**, or **Delete provider**.
+**models.dev auto-update**, **Edit per model**, **Delete models**,
+**Add models manually**, **API flavor**, **Endpoint**, **Rename provider**, or
+**Delete provider**.
 
 Per-model edits change one field in place — untouched fields (cost, headers,
 overrides) are preserved.
+
+### Auto-update from models.dev
+
+Providers added from the catalog can mirror that catalog instead of being a
+one-time copy. Enabled with a confirm at the end of the add flow, or later via
+**Edit provider → models.dev auto-update** (which also has **Sync now** and
+**Disable**). While enabled, every session start:
+
+- adds models the catalog published since — new releases show up in `/model`
+  without any action;
+- refreshes the catalog's authoritative fields (context window, max output,
+  image input, reasoning, prices) on the models you already have;
+- removes models the catalog itself dropped.
+
+Nothing comes back that you got rid of: models you deselected while adding the
+provider, and models you delete afterwards, are recorded as suppressed. Hand-
+added models on that provider are never touched. The mirror state lives in
+`custom-provider-sync.json`; the models themselves stay in `models.json`.
+Sync failures (offline, catalog down) are silent and retried next session.
 
 ## How metadata is resolved
 
@@ -135,6 +155,10 @@ Pi (official split, same as `/login`):
   and is not a place for custom models.
 - Legacy inline `apiKey` entries migrate to `auth.json` on the next save;
   deleting a provider removes its `auth.json` entry, renaming moves it.
+- `~/.pi/agent/custom-provider-sync.json` — auto-update mirror state: which
+  catalog provider each mirrored provider tracks, which model ids the mirror
+  owns, and which ids the user suppressed. Deleting an entry (or the whole
+  file) simply stops the mirror; the models stay in `models.json`.
 
 ### Built-in id collision
 

@@ -1,7 +1,16 @@
-import { describeProbeInfo, fetchModelsDevInfoForBaseUrl, probeModels } from "model-probe";
+import { describeProbeInfo, fetchModelsDevInfoForBaseUrl, fetchModelsDevModels, fetchModelsDevProviders, probeModels } from "model-probe";
 import { apiKeyFromProvider, resolveApiKeyForProbe } from "../api-key.ts";
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, renameProviderApiKey, saveModelsConfig } from "../config.ts";
 import { applyReasoning, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
+import {
+	describeSyncResult,
+	managedProvider,
+	markManaged,
+	renameManaged,
+	suppressModels,
+	syncProvider,
+	unmarkManaged,
+} from "../modelsdev-sync.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { CommandContext, ModelProbeInfo, ModelsConfig, ProbeResult, ProviderApi, SelectItem } from "../types.ts";
 import { pickMany, pickTriState, selectOne } from "../ui/select.ts";
@@ -89,8 +98,10 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 		}
 
 		const modelCount = Array.isArray(provider.models) ? provider.models.length : 0;
+		const managed = managedProvider(providerId);
 		const action = await selectOne(ctx, `Edit ${providerId}`, [
 			{ value: "probe", label: "Re-probe for models", description: "Query /models again: add new models, flag vanished ones as unsupported, offer metadata updates" },
+			{ value: "autoupdate", label: "models.dev auto-update", suffix: managed ? ` • ${managed.modelsDevProviderId}` : " • off", description: "Mirror a models.dev catalog: new models and refreshed metadata at every session start" },
 			{ value: "models", label: "Edit per model", description: `${modelCount} model${modelCount === 1 ? "" : "s"} — reasoning, image input, context, max tokens, headers, delete` },
 			{ value: "deletemodels", label: "Delete models", description: "Remove multiple models at once" },
 			{ value: "add", label: "Add models manually", description: "Type model ids to add" },
@@ -106,6 +117,8 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 			await editProviderModels(ctx, providerId);
 		} else if (action === "probe") {
 			await reprobeProvider(ctx, providerId);
+		} else if (action === "autoupdate") {
+			await manageAutoUpdate(ctx, providerId);
 		} else if (action === "deletemodels") {
 			await deleteModelsFromProvider(ctx, providerId);
 		} else if (action === "add") {
@@ -255,7 +268,95 @@ async function renameProvider(ctx: CommandContext, providerId: string): Promise<
 	}
 
 	ctx.ui.notify(`Renamed "${providerId}" → "${newId}".`, "info");
+	// Keep the models.dev mirror attached to the renamed provider.
+	renameManaged(providerId, newId);
 	return newId;
+}
+
+// models.dev auto-update: mirror a catalog provider's model list. Mirrored
+// entries live in models.json like any other provider; the sync state (which
+// ids the mirror owns, which the user suppressed) is kept in
+// custom-provider-sync.json — see modelsdev-sync.ts.
+async function manageAutoUpdate(ctx: CommandContext, providerId: string) {
+	const managed = managedProvider(providerId);
+	const items: SelectItem[] = managed
+		? [
+				{ value: "sync", label: "Sync now", description: `Pull new models and refreshed metadata from the ${managed.modelsDevProviderId} catalog` },
+				{ value: "off", label: "Disable auto-update", description: "Keep the current model list as-is; stop tracking models.dev" },
+				{ value: "back", label: "Back", description: "Return to the provider menu" },
+			]
+		: [
+				{ value: "on", label: "Enable auto-update", description: "Mirror a models.dev catalog provider: new models appear at session start" },
+				{ value: "back", label: "Back", description: "Return to the provider menu" },
+			];
+	const action = await selectOne(ctx, `models.dev auto-update — ${providerId}`, items);
+	if (!action || action === "back") return;
+
+	if (action === "off") {
+		unmarkManaged(providerId);
+		ctx.ui.notify(`Auto-update disabled for "${providerId}" — the current model list stays.`, "info");
+		return;
+	}
+
+	if (action === "on") {
+		let providers: Awaited<ReturnType<typeof fetchModelsDevProviders>>;
+		try {
+			ctx.ui.notify("Fetching the models.dev provider catalog ...", "info");
+			providers = await fetchModelsDevProviders();
+		} catch (error) {
+			ctx.ui.notify(`Could not fetch the models.dev catalog: ${error instanceof Error ? error.message : String(error)}`, "error");
+			return;
+		}
+		const provider = loadModelsConfig().providers?.[providerId];
+		const baseUrl = typeof provider?.baseUrl === "string" ? provider.baseUrl : "";
+		const choice = await selectOne(
+			ctx,
+			`Which catalog provider does "${providerId}" mirror?`,
+			[...providers.values()]
+				.sort((a, b) => a.name.localeCompare(b.name))
+				.map((p) => ({
+					value: p.id,
+					label: p.name,
+					suffix: ` • ${p.baseUrl}`,
+					description: p.baseUrl === baseUrl ? "matches this provider's endpoint" : undefined,
+					searchText: `${p.id} ${p.name} ${p.baseUrl}`,
+				})),
+		);
+		if (!choice) return;
+		let catalog: Awaited<ReturnType<typeof fetchModelsDevModels>>;
+		try {
+			catalog = await fetchModelsDevModels(choice);
+		} catch (error) {
+			ctx.ui.notify(`Could not read the ${choice} catalog: ${error instanceof Error ? error.message : String(error)}`, "error");
+			return;
+		}
+		if (catalog.size === 0) {
+			ctx.ui.notify(`models.dev lists no models for "${choice}".`, "warning");
+			return;
+		}
+		// Models already configured become the mirror's own set; catalog ids the
+		// user doesn't have yet are NOT bulk-added — only models published from
+		// now on get added, so enabling this doesn't flood the provider.
+		const currentIds = (Array.isArray(provider?.models) ? provider.models : []).map(modelIdOf).filter(Boolean);
+		markManaged(providerId, choice, currentIds, [...catalog.keys()]);
+		ctx.ui.notify(`Auto-update enabled for "${providerId}" — mirroring the ${choice} catalog.`, "info");
+	}
+
+	// "on" also runs an immediate sync so the state is consistent right away.
+	try {
+		const result = await syncProvider(ctx, providerId);
+		if (!result) {
+			ctx.ui.notify(`"${providerId}" is no longer mirrored.`, "warning");
+			return;
+		}
+		const summary = describeSyncResult(result);
+		ctx.ui.notify(
+			summary ? `models.dev sync: ${summary} in "${providerId}".` : `"${providerId}" is already up to date.`,
+			"info",
+		);
+	} catch (error) {
+		ctx.ui.notify(`models.dev sync failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+	}
 }
 
 // Remove several models at once: multi-select over the provider's models,
@@ -290,7 +391,11 @@ async function deleteModelsFromProvider(ctx: CommandContext, providerId: string)
 		p.models = (Array.isArray(p.models) ? p.models : []).filter((m: any) => !removeSet.has(modelIdOf(m)));
 		return true;
 	});
-	if (saved) ctx.ui.notify(`Deleted ${picked.length} model${picked.length === 1 ? "" : "s"} from "${providerId}".`, "info");
+	if (saved) {
+		// A mirrored provider must not resurrect models the user deleted.
+		suppressModels(providerId, picked);
+		ctx.ui.notify(`Deleted ${picked.length} model${picked.length === 1 ? "" : "s"} from "${providerId}".`, "info");
+	}
 }
 
 // Pick a model, then a field to edit. Each edit mutates one field in place so
@@ -397,7 +502,11 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 				models.splice(index, 1);
 				return true;
 			});
-			if (saved) ctx.ui.notify(`Deleted "${modelId}".`, "info");
+			if (saved) {
+				// A mirrored provider must not resurrect a model the user deleted.
+				suppressModels(providerId, [modelId]);
+				ctx.ui.notify(`Deleted "${modelId}".`, "info");
+			}
 			return true;
 		}
 	}

@@ -12,6 +12,7 @@ import {
 } from "model-probe";
 import { resolveApiKeyForProbe, serializeApiKey } from "../api-key.ts";
 import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, removeProviderApiKey, saveModelsConfig, saveProviderApiKey } from "../config.ts";
+import { unmarkManaged } from "../modelsdev-sync.ts";
 import { buildModelEntry, modelIdOf, modelOptionsFromProbe, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { GatewayProbeProfile } from "../presets.ts";
@@ -188,6 +189,8 @@ export async function removeProvider(ctx: CommandContext, providerId: string): P
 	} catch (error) {
 		ctx.ui.notify(`Provider deleted, but its auth.json entry could not be removed: ${error instanceof Error ? error.message : String(error)}`, "warning");
 	}
+	// Forget any models.dev mirror attached to this provider.
+	unmarkManaged(providerId);
 	ctx.ui.notify(`Deleted provider "${providerId}" from ${MODELS_JSON_PATH}`, "info");
 	return true;
 }

@@ -52,7 +52,7 @@ if (yamlPkgRoot) {
 	}
 }
 
-const AGENT_DIR = CodingAgent.getAgentDir();
+export const AGENT_DIR = CodingAgent.getAgentDir();
 const IS_OMP = "logger" in CodingAgent || /(^|[\\/])\.?omp([\\/]|$)/i.test(AGENT_DIR);
 // OMP prefers YAML and still accepts legacy JSON; normal Pi uses JSON only.
 export const MODELS_JSON_PATH = (IS_OMP ? ["models.yml", "models.yaml", "models.json"] : ["models.json"])

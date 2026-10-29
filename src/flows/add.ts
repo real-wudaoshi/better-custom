@@ -16,6 +16,7 @@ import type { ApiKeyMode, CommandContext, ModelOptions, ModelProbeInfo, ModelsCo
 import { pickMany, selectOne } from "../ui/select.ts";
 import { promptApiKey, promptEndpoint, promptManualModels, promptProviderId, promptProviderStyle } from "../ui/prompts.ts";
 import { buildProbeUrl, dedupe, hasExplicitScheme, normalizeEndpoint } from "../url.ts";
+import { markManaged } from "../modelsdev-sync.ts";
 import { collectProbedModelInfo, fetchGatewayWideInfo, findProvidersByEndpoint, persistApiKey, persistProvider, probePickerItems } from "./shared.ts";
 
 // Manual model entry (id → per-model metadata menu) lives in ui/prompts.ts as
@@ -140,6 +141,24 @@ async function addFromCatalog(ctx: CommandContext) {
 			(withMeta > 0 ? ` (${withMeta} model${withMeta === 1 ? "" : "s"} with metadata)` : ""),
 		"info",
 	);
+
+	// The catalog is the source of truth on this path, so keeping the provider
+	// in sync is the natural default. Models the user did NOT pick here are
+	// recorded as suppressed — a later sync adds newly published models without
+	// resurrecting the ones skipped on purpose.
+	if (catalog.size > 0) {
+		const autoUpdate = await ctx.ui.confirm(
+			"Auto-update from models.dev?",
+			`Keep "${providerId}" in sync with the ${provider.name} catalog?\n\n` +
+				"Each session start adds models published since, refreshes context/max-out/image/reasoning/prices, " +
+				"and removes models the catalog dropped. Models you deselected above or delete later are never re-added.\n\n" +
+				"Toggle this any time under Edit provider → models.dev auto-update.",
+		);
+		if (autoUpdate) {
+			markManaged(providerId, provider.id, ids, [...catalog.keys()]);
+			ctx.ui.notify(`Auto-update enabled for "${providerId}" (${provider.name} catalog).`, "info");
+		}
+	}
 	ctx.ui.notify("Open /model to use your new provider.", "info");
 }
 

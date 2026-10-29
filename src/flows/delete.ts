@@ -1,5 +1,6 @@
 import { loadModelsConfig, MODELS_JSON_PATH, removeProviderApiKey, saveModelsConfig } from "../config.ts";
 import type { CommandContext, ModelsConfig } from "../types.ts";
+import { unmarkManaged } from "../modelsdev-sync.ts";
 import { selectOne } from "../ui/select.ts";
 import { describeProvider, describeProviderInline, refreshModelRegistry } from "./shared.ts";
 
@@ -65,6 +66,8 @@ export async function deleteProviderFlow(ctx: CommandContext) {
 		} catch (error) {
 			ctx.ui.notify(`Provider deleted, but its auth.json entry could not be removed: ${error instanceof Error ? error.message : String(error)}`, "warning");
 		}
+		// Forget any models.dev mirror for this provider.
+		unmarkManaged(choice);
 
 		deletedAny = true;
 		ctx.ui.notify(`Deleted provider "${choice}" from ${MODELS_JSON_PATH}`, "info");
