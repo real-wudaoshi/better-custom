@@ -30,7 +30,7 @@ export function serializeApiKey(mode: ApiKeyMode, value?: string, style?: Provid
 }
 
 // Resolve a stored provider's key reference back into mode+value so we can
-// reuse it for probing. Reads auth.json first (pi's official split), falling
+// reuse it for probing. Reads the stored key first (custom-providers-auth.json), falling
 // back to a legacy inline apiKey in the models config. Anything other than
 // $VAR or !cmd is treated as literal.
 export function apiKeyFromProvider(providerId: string, provider: any): { mode: ApiKeyMode; value?: string } {

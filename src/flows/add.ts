@@ -9,7 +9,7 @@ import {
 	type ModelsDevProvider,
 } from "model-probe";
 import { resolveApiKeyForProbe } from "../api-key.ts";
-import { loadModelsConfig, MODELS_JSON_PATH } from "../config.ts";
+import { loadModelsConfig, STORE_PATH } from "../config.ts";
 import { buildProviderConfig } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { ApiKeyMode, CommandContext, ModelOptions, ModelProbeInfo, ModelsConfig, ProviderApi, ProviderStyle } from "../types.ts";
@@ -52,7 +52,7 @@ async function confirmEndpointReuse(ctx: CommandContext, normalizedEndpoint: str
 	try {
 		config = loadModelsConfig();
 	} catch (error) {
-		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return false;
 	}
 
@@ -94,7 +94,7 @@ async function addFromCatalog(ctx: CommandContext) {
 	const apiKey = await promptApiKey(ctx);
 	if (!apiKey) return;
 	if (apiKey.mode === "none") {
-		ctx.ui.notify('No API key selected. Using "dummy" automatically in auth.json.', "info");
+		ctx.ui.notify('No API key selected. A "dummy" key is stored so the provider still loads.', "info");
 	}
 
 	ctx.ui.notify(`Fetching the model list for ${provider.name} from models.dev ...`, "info");
@@ -137,7 +137,7 @@ async function addFromCatalog(ctx: CommandContext) {
 
 	const withMeta = infoById ? ids.filter((id) => probeInfoSummary(infoById.get(id) ?? {}).length > 0).length : 0;
 	ctx.ui.notify(
-		`Saved provider "${providerId}" to ${MODELS_JSON_PATH} — models and metadata from models.dev` +
+		`Saved provider "${providerId}" to ${STORE_PATH} — models and metadata from models.dev` +
 			(withMeta > 0 ? ` (${withMeta} model${withMeta === 1 ? "" : "s"} with metadata)` : ""),
 		"info",
 	);
@@ -240,8 +240,8 @@ async function addCustom(ctx: CommandContext) {
 	if (apiKey.mode === "none") {
 		ctx.ui.notify(
 			style === "ollama"
-				? 'No API key selected. Using "ollama" automatically in auth.json.'
-				: 'No API key selected. Using "dummy" automatically in auth.json.',
+				? 'No API key selected. An "ollama" placeholder key is stored so the provider still loads.'
+				: 'No API key selected. A "dummy" key is stored so the provider still loads.',
 			"info",
 		);
 	}
@@ -298,7 +298,7 @@ async function addCustom(ctx: CommandContext) {
 	if (inferredCount > 0) summary.push(`inferred from known models ${inferredCount}`);
 	if (defaultedCount > 0) summary.push(`defaults ${defaultedCount}`);
 	ctx.ui.notify(
-		`Saved provider "${providerId}" to ${MODELS_JSON_PATH}` + (summary.length > 0 ? ` — context/image/reasoning: ${summary.join(", ")}` : ""),
+		`Saved provider "${providerId}" to ${STORE_PATH}` + (summary.length > 0 ? ` — context/image/reasoning: ${summary.join(", ")}` : ""),
 		"info",
 	);
 	ctx.ui.notify("Open /model to use your new provider.", "info");

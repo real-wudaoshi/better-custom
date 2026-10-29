@@ -1,7 +1,7 @@
 {
   "name": "better-custom-provider",
-  "version": "1.8.1",
-  "description": "Pi and Oh My Pi extension for managing custom providers through an interactive wizard.",
+  "version": "2.0.0",
+  "description": "Custom provider wizard for pi: add, probe, edit and sync custom LLM providers in its own store",
   "type": "module",
   "keywords": [
     "pi-package",
@@ -54,8 +54,7 @@
     ]
   },
   "dependencies": {
-    "model-probe": "^0.7.0",
-    "yaml": "^2.9.0"
+    "model-probe": "^0.7.0"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
@@ -71,6 +70,6 @@
   },
   "scripts": {
     "build": "echo 'No build step required'",
-    "check": "node --check index.ts && node --check src/types.ts && node --check src/config.ts && node --check src/url.ts && node --check src/api-key.ts && node --check src/model-entry.ts && node --check src/modelsdev-sync.ts && node --check src/ui/select.ts && node --check src/ui/prompts.ts && node --check src/flows/shared.ts && node --check src/flows/add.ts && node --check src/flows/edit.ts && node --check src/flows/delete.ts"
+    "check": "node --check index.ts && node --check src/types.ts && node --check src/config.ts && node --check src/registration.ts && node --check src/url.ts && node --check src/api-key.ts && node --check src/model-entry.ts && node --check src/modelsdev-sync.ts && node --check src/ui/select.ts && node --check src/ui/prompts.ts && node --check src/flows/shared.ts && node --check src/flows/add.ts && node --check src/flows/edit.ts && node --check src/flows/delete.ts && node --check src/flows/migrate.ts"
   }
 }

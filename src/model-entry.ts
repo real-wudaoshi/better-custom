@@ -1,5 +1,3 @@
-import { serializeApiKey } from "./api-key.ts";
-import { SPLIT_AUTH } from "./config.ts";
 import { resolveModelInfo } from "model-probe";
 import { PI_THINKING_LEVELS, REASONING_LEVELS } from "./types.ts";
 import type {
@@ -159,14 +157,10 @@ export function buildProviderConfig(
 	// resolved value when the user left it unset).
 	optionOverrides?: Map<string, ModelOptions>,
 ) {
-	const serializedApiKey = serializeApiKey(apiKey.mode, apiKey.value, style);
+	// The key is written to our own auth file by persistApiKey, never inline.
 	const config: any = {
 		baseUrl,
 		api,
-		// With the auth split, the key goes to auth.json (written by the caller
-		// after the provider is persisted) and stays out of models.json, exactly
-		// like pi's own /login flow. Only OMP keeps it inline.
-		...(!SPLIT_AUTH && serializedApiKey ? { apiKey: serializedApiKey } : {}),
 		models: modelIds.map((id) => {
 			// resolveModelInfo layers detected metadata over models.dev, the local
 			// rules, the api fallback, and the built-in defaults — including for
@@ -185,7 +179,6 @@ export function buildProviderConfig(
 	};
 
 	if (style === "ollama") {
-		if (!SPLIT_AUTH && !config.apiKey) config.apiKey = "ollama";
 		config.compat = {
 			supportsDeveloperRole: false,
 			supportsReasoningEffort: false,

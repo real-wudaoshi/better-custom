@@ -1,6 +1,6 @@
 import { describeProbeInfo, fetchModelsDevInfoForBaseUrl, probeModels } from "model-probe";
 import { apiKeyFromProvider, resolveApiKeyForProbe } from "../api-key.ts";
-import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, renameProviderApiKey, saveModelsConfig } from "../config.ts";
+import { ensureCustomId, loadModelsConfig, STORE_PATH, renameProviderApiKey, saveModelsConfig } from "../config.ts";
 import { applyReasoning, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
 import { renameManaged, suppressModels } from "../modelsdev-sync.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
@@ -14,7 +14,6 @@ import {
 	promptMaxTokens,
 	promptReasoning,
 	promptImage,
-	resolveBuiltinCollision,
 } from "../ui/prompts.ts";
 import { buildProbeUrl, normalizeEndpoint, slugify } from "../url.ts";
 import {
@@ -29,7 +28,6 @@ import {
 	mutateProvider,
 	providerModelItems,
 	providerStyleOf,
-	refreshModelRegistry,
 	removeProvider,
 } from "./shared.ts";
 
@@ -41,14 +39,14 @@ export async function editProviderFlow(ctx: CommandContext) {
 		try {
 			config = loadModelsConfig();
 		} catch (error) {
-			ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+			ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 			return;
 		}
 
 		config.providers ||= {};
 		const providerIds = Object.keys(config.providers).sort((a, b) => a.localeCompare(b));
 		if (providerIds.length === 0) {
-			ctx.ui.notify(`No providers found in ${MODELS_JSON_PATH}`, "warning");
+			ctx.ui.notify(`No providers found in ${STORE_PATH}`, "warning");
 			return;
 		}
 
@@ -80,7 +78,7 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 		try {
 			config = loadModelsConfig();
 		} catch (error) {
-			ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+			ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 			return;
 		}
 		const provider = config.providers?.[providerId];
@@ -139,7 +137,7 @@ async function changeProviderApi(ctx: CommandContext, providerId: string) {
 	try {
 		provider = loadModelsConfig().providers?.[providerId];
 	} catch (error) {
-		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return;
 	}
 	const current = typeof provider?.api === "string" ? (provider.api as ProviderApi) : undefined;
@@ -166,7 +164,7 @@ async function changeProviderEndpoint(ctx: CommandContext, providerId: string) {
 	try {
 		provider = loadModelsConfig().providers?.[providerId];
 	} catch (error) {
-		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return;
 	}
 	const current = typeof provider?.baseUrl === "string" ? provider.baseUrl : "";
@@ -201,7 +199,7 @@ async function renameProvider(ctx: CommandContext, providerId: string): Promise<
 	try {
 		config = loadModelsConfig();
 	} catch (error) {
-		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return null;
 	}
 	config.providers ||= {};
@@ -213,22 +211,14 @@ async function renameProvider(ctx: CommandContext, providerId: string): Promise<
 	const input = await ctx.ui.input("Rename provider", `current: ${providerId}`);
 	if (input === undefined) return null;
 	// Slugify so names stay consistent with the Add flow.
-	let newId = slugify(input.trim());
+	// Every id lives in our own namespace, so a rename can never collide with a
+	// built-in provider. Typing "foo" (or "custom-foo") both land on "custom-foo".
+	let newId = ensureCustomId(slugify(input.trim()));
 	if (!newId || newId === providerId) return null;
 
 	if (config.providers[newId]) {
 		ctx.ui.notify(`Provider "${newId}" already exists. Choose a different name.`, "warning");
 		return null;
-	}
-
-	if (BUILTIN_PROVIDER_IDS.has(newId)) {
-		const resolved = await resolveBuiltinCollision(ctx, newId);
-		if (resolved === null || resolved === providerId) return null;
-		if (config.providers[resolved]) {
-			ctx.ui.notify(`Provider "${resolved}" already exists. Choose a different name.`, "warning");
-			return null;
-		}
-		newId = resolved;
 	}
 
 	// Rebuild key-by-key so the renamed entry keeps its position rather than
@@ -242,17 +232,16 @@ async function renameProvider(ctx: CommandContext, providerId: string): Promise<
 	try {
 		saveModelsConfig(config);
 	} catch (error) {
-		ctx.ui.notify(`Could not write ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		ctx.ui.notify(`Could not write ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return null;
 	}
-	await refreshModelRegistry(ctx);
 
-	// Carry the auth.json entry over to the new id; best-effort, the rename
+	// Carry the stored key over to the new id; best-effort, the rename
 	// itself already succeeded.
 	try {
 		renameProviderApiKey(providerId, newId);
 	} catch (error) {
-		ctx.ui.notify(`Renamed, but the auth.json entry could not be moved: ${error instanceof Error ? error.message : String(error)}`, "warning");
+		ctx.ui.notify(`Renamed, but the stored key could not be moved: ${error instanceof Error ? error.message : String(error)}`, "warning");
 	}
 
 	ctx.ui.notify(`Renamed "${providerId}" → "${newId}".`, "info");
@@ -268,7 +257,7 @@ async function deleteModelsFromProvider(ctx: CommandContext, providerId: string)
 	try {
 		provider = loadModelsConfig().providers?.[providerId];
 	} catch (error) {
-		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return;
 	}
 	const modelItems = providerModelItems(provider);
@@ -279,12 +268,9 @@ async function deleteModelsFromProvider(ctx: CommandContext, providerId: string)
 
 	const picked = await pickMany(ctx, `Delete models from ${providerId}`, modelItems);
 	if (!picked || picked.length === 0) return;
-	const collisionNote = BUILTIN_PROVIDER_IDS.has(providerId)
-		? `\nNote: "${providerId}" shares its id with a built-in provider — models that also ship in pi's built-in catalog will still appear in /model after deletion.`
-		: "";
 	const confirmed = await ctx.ui.confirm(
 		"Delete models?",
-		`Remove ${picked.length} model${picked.length === 1 ? "" : "s"} from "${providerId}":\n${picked.map((id) => `- ${id}`).join("\n")}${collisionNote}`,
+		`Remove ${picked.length} model${picked.length === 1 ? "" : "s"} from "${providerId}":\n${picked.map((id) => `- ${id}`).join("\n")}`,
 	);
 	if (!confirmed) return;
 
@@ -309,7 +295,7 @@ async function editProviderModels(ctx: CommandContext, providerId: string) {
 		try {
 			provider = loadModelsConfig().providers?.[providerId];
 		} catch (error) {
-			ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+			ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 			return;
 		}
 		const modelItems = providerModelItems(provider);
@@ -337,7 +323,7 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 		try {
 			model = findModel(loadModelsConfig().providers?.[providerId], modelId);
 		} catch (error) {
-			ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+			ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 			return false;
 		}
 		if (!model) {
@@ -392,10 +378,7 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 		} else if (field === "refresh") {
 			await refreshModelMetadata(ctx, providerId, modelId);
 		} else if (field === "delete") {
-			const collisionNote = BUILTIN_PROVIDER_IDS.has(providerId)
-				? ` Note: "${providerId}" shares its id with a built-in provider — if this model also ships in pi's built-in catalog, it will still appear in /model after deletion.`
-				: "";
-			const ok = await ctx.ui.confirm("Delete model?", `Remove "${modelId}" from "${providerId}"?${collisionNote}`);
+			const ok = await ctx.ui.confirm("Delete model?", `Remove "${modelId}" from "${providerId}"?`);
 			if (!ok) continue;
 			const saved = await mutateProvider(ctx, providerId, (p) => {
 				const models = Array.isArray(p.models) ? p.models : [];
@@ -528,7 +511,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	try {
 		provider = loadModelsConfig().providers?.[providerId];
 	} catch (error) {
-		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return;
 	}
 	const api = typeof provider?.api === "string" ? (provider.api as ProviderApi) : "openai-completions";
@@ -717,7 +700,7 @@ async function refreshModelMetadata(ctx: CommandContext, providerId: string, mod
 	try {
 		provider = loadModelsConfig().providers?.[providerId];
 	} catch (error) {
-		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return;
 	}
 	if (!provider) {
@@ -856,7 +839,7 @@ async function addModelsToProvider(ctx: CommandContext, providerId: string) {
 	try {
 		provider = loadModelsConfig().providers?.[providerId];
 	} catch (error) {
-		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return;
 	}
 	const style = providerStyleOf(provider);

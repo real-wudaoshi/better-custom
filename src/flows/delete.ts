@@ -1,8 +1,8 @@
-import { loadModelsConfig, MODELS_JSON_PATH, removeProviderApiKey, saveModelsConfig } from "../config.ts";
+import { loadModelsConfig, STORE_PATH, removeProviderApiKey, saveModelsConfig } from "../config.ts";
 import type { CommandContext, ModelsConfig } from "../types.ts";
 import { unmarkManaged } from "../modelsdev-sync.ts";
 import { selectOne } from "../ui/select.ts";
-import { describeProvider, describeProviderInline, refreshModelRegistry } from "./shared.ts";
+import { describeProvider, describeProviderInline } from "./shared.ts";
 
 export async function deleteProviderFlow(ctx: CommandContext) {
 	let cursor = 0;
@@ -13,7 +13,7 @@ export async function deleteProviderFlow(ctx: CommandContext) {
 		try {
 			config = loadModelsConfig();
 		} catch (error) {
-			ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+			ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 			return;
 		}
 
@@ -21,7 +21,7 @@ export async function deleteProviderFlow(ctx: CommandContext) {
 		const providerIds = Object.keys(config.providers).sort((a, b) => a.localeCompare(b));
 		if (providerIds.length === 0) {
 			ctx.ui.notify(
-				deletedAny ? `No providers left in ${MODELS_JSON_PATH}` : `No providers found in ${MODELS_JSON_PATH}`,
+				deletedAny ? `No providers left in ${STORE_PATH}` : `No providers found in ${STORE_PATH}`,
 				deletedAny ? "info" : "warning",
 			);
 			return;
@@ -55,21 +55,20 @@ export async function deleteProviderFlow(ctx: CommandContext) {
 		try {
 			saveModelsConfig(config);
 		} catch (error) {
-			ctx.ui.notify(`Could not write ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+			ctx.ui.notify(`Could not write ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 			return;
 		}
-		await refreshModelRegistry(ctx);
 
-		// Drop the auth.json entry along with the provider (best-effort).
+		// Drop the stored key along with the provider (best-effort).
 		try {
 			removeProviderApiKey(choice);
 		} catch (error) {
-			ctx.ui.notify(`Provider deleted, but its auth.json entry could not be removed: ${error instanceof Error ? error.message : String(error)}`, "warning");
+			ctx.ui.notify(`Provider deleted, but its stored key could not be removed: ${error instanceof Error ? error.message : String(error)}`, "warning");
 		}
 		// Forget any models.dev mirror for this provider.
 		unmarkManaged(choice);
 
 		deletedAny = true;
-		ctx.ui.notify(`Deleted provider "${choice}" from ${MODELS_JSON_PATH}`, "info");
+		ctx.ui.notify(`Deleted provider "${choice}" from ${STORE_PATH}`, "info");
 	}
 }

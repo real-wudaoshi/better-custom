@@ -1,192 +1,101 @@
 import * as CodingAgent from "@mariozechner/pi-coding-agent";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { ModelsConfig } from "./types.ts";
 
-type YamlModule = {
-	parse(text: string): any;
-	stringify(value: any, options?: { lineWidth?: number }): string;
-};
-
-// `yaml` is only needed to read/write OMP's models.yml. A static
-// `import ... from "yaml"` would crash the whole extension at load time when
-// the package is absent, so load it lazily. The previous build used
-// `createRequire(import.meta.url)("yaml")` and let Node walk `node_modules`,
-// but the OMP compiled-binary loader serves this file from an `onLoad` hook
-// whose module graph never reaches the plugin's sibling `node_modules`, so
-// that path throws `Cannot find module 'yaml'` even when the package is
-// installed. Walk `node_modules` ourselves from the extension's own
-// location, then require the resolved entry through a require anchored at
-// the package itself.
-function resolveSiblingPackage(name: string): string | null {
-	let dir = dirname(fileURLToPath(import.meta.url));
-	while (true) {
-		const candidate = join(dir, "node_modules", name);
-		if (existsSync(join(candidate, "package.json"))) return candidate;
-		const parent = dirname(dir);
-		if (parent === dir) return null;
-		dir = parent;
-	}
-}
-
-let yamlModule: YamlModule | undefined;
-const yamlPkgRoot = resolveSiblingPackage("yaml");
-if (yamlPkgRoot) {
-	try {
-		// Read the package's `main` (or the `node` condition under `exports["."]`)
-		// and require the resolved file directly. `createRequire(pkgDir)(pkgDir)`
-		// would let the host do `require(<dir>)` resolution, which the OMP
-		// compiled-binary loader rejects with "Cannot find module"; pinning the
-		// absolute file path keeps the require anchored at a real source on disk.
-		const manifest = JSON.parse(readFileSync(join(yamlPkgRoot, "package.json"), "utf8")) as {
-			main?: string;
-			exports?: { "."?: { node?: string; default?: string } };
-		};
-		const mainRel = manifest.exports?.["."]?.node ?? manifest.main ?? "./index.js";
-		const mainAbs = join(yamlPkgRoot, mainRel);
-		yamlModule = createRequire(mainAbs)(mainAbs) as YamlModule;
-	} catch {
-		yamlModule = undefined;
-	}
-}
-
+// This extension keeps its own store instead of writing into pi's models.json:
+//   custom-providers.json       this extension's providers (never pi's file)
+//   custom-providers-auth.json  their API keys (never pi's auth.json)
+// At load time every provider here is injected into pi with
+// pi.registerProvider(), so it shows up in /model exactly like a native one
+// while the files stay separate.
 export const AGENT_DIR = CodingAgent.getAgentDir();
-const IS_OMP = "logger" in CodingAgent || /(^|[\\/])\.?omp([\\/]|$)/i.test(AGENT_DIR);
-// OMP prefers YAML and still accepts legacy JSON; normal Pi uses JSON only.
-export const MODELS_JSON_PATH = (IS_OMP ? ["models.yml", "models.yaml", "models.json"] : ["models.json"])
-	.map((name) => join(AGENT_DIR, name))
-	.find(existsSync) ?? join(AGENT_DIR, IS_OMP ? "models.yml" : "models.json");
-const IS_YAML_CONFIG = /\.ya?ml$/i.test(MODELS_JSON_PATH);
-// Built-in provider ids, copied from pi-ai's getBuiltinProviders() (the
-// authoritative source — regenerate against the installed pi when updating).
-// A custom provider reusing one of these ids COLLIDES with the built-in: pi
-// merges the built-in catalog into the provider (built-in models can never be
-// removed via models.json), and auth.json is keyed by id, so /login & /logout
-// for the built-in also read/wipe the custom provider's key.
-export const BUILTIN_PROVIDER_IDS = new Set([
-	"amazon-bedrock",
-	"ant-ling",
-	"anthropic",
-	"azure-openai-responses",
-	"baseten",
-	"cerebras",
-	"cloudflare-ai-gateway",
-	"cloudflare-workers-ai",
-	"deepseek",
-	"fireworks",
-	"github-copilot",
-	"google",
-	"google-vertex",
-	"groq",
-	"huggingface",
-	"kimi-coding",
-	"minimax",
-	"minimax-cn",
-	"mistral",
-	"moonshotai",
-	"moonshotai-cn",
-	"nvidia",
-	"openai",
-	"openai-codex",
-	"opencode",
-	"opencode-go",
-	"openrouter",
-	"qwen-token-plan",
-	"qwen-token-plan-cn",
-	"qwen-token-plan-individual",
-	"together",
-	"vercel-ai-gateway",
-	"xai",
-	"xiaomi",
-	"xiaomi-token-plan-ams",
-	"xiaomi-token-plan-cn",
-	"xiaomi-token-plan-sgp",
-	"zai",
-	"zai-coding-cn",
-]);
+export const STORE_PATH = join(AGENT_DIR, "custom-providers.json");
+export const STORE_AUTH_PATH = join(AGENT_DIR, "custom-providers-auth.json");
+// pi's own files — read only for the one-time import and never written.
+export const PI_MODELS_PATH = join(AGENT_DIR, "models.json");
+export const PI_AUTH_PATH = join(AGENT_DIR, "auth.json");
 
-// Warning text shown when a custom provider (re)uses a built-in id.
-export const BUILTIN_COLLISION_WARNING =
-	"This id matches a built-in provider. pi merges the built-in model catalog into it — built-in models stay visible even if you delete them here — and /login & /logout for this id share the same auth.json entry, so logging out wipes your key too. Consider a distinct id (e.g. suffix -relay) unless you deliberately want to extend the built-in.";
+// Every custom provider id carries this prefix. It is the visible marker that
+// separates our providers from pi's built-ins in /model and /login, and it
+// makes an id collision with a built-in provider impossible.
+export const CUSTOM_PREFIX = "custom-";
+
+export function isCustomId(id: string): boolean {
+	return id.startsWith(CUSTOM_PREFIX);
+}
+
+// Normalize any user/legacy id into our namespace: "Ustc Relay" -> "custom-ustc-relay".
+export function ensureCustomId(id: string): string {
+	const trimmed = id.trim();
+	const stripped = isCustomId(trimmed) ? trimmed.slice(CUSTOM_PREFIX.length) : trimmed;
+	return `${CUSTOM_PREFIX}${stripped}`;
+}
 
 function ensureConfigDir() {
-	mkdirSync(dirname(MODELS_JSON_PATH), { recursive: true });
+	mkdirSync(dirname(STORE_PATH), { recursive: true });
 }
 
-// pi's official split: credentials live in auth.json (the file /login writes),
-// model declarations in models.json. pi resolves an auth.json entry by provider
-// id for ANY provider (built-in or custom), and its key field supports the same
-// "$ENV" / "!cmd" syntax as an inline apiKey — so a custom provider declared in
-// models.json without an apiKey picks its key up from auth.json automatically.
-// OMP's key handling is kept inline (models.yml) since its auth.json semantics
-// are not verified.
-export const AUTH_JSON_PATH = join(AGENT_DIR, "auth.json");
-export const SPLIT_AUTH = !IS_OMP;
+// Fired after every store/auth write so the caller can re-register the
+// providers with pi. Set from index.ts (keeps this module host-agnostic).
+let saveListener: (() => void) | undefined;
+export function onStoreSaved(listener: () => void): void {
+	saveListener = listener;
+}
 
 type AuthFile = Record<string, any>;
 
 export function loadAuthFile(): AuthFile {
-	if (!existsSync(AUTH_JSON_PATH)) return {};
-	const raw = readFileSync(AUTH_JSON_PATH, "utf8").trim();
+	if (!existsSync(STORE_AUTH_PATH)) return {};
+	const raw = readFileSync(STORE_AUTH_PATH, "utf8").trim();
 	if (!raw) return {};
 	const parsed = JSON.parse(raw);
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-		throw new Error(`${AUTH_JSON_PATH} must be an object`);
+		throw new Error(`${STORE_AUTH_PATH} must be an object`);
 	}
 	return parsed;
 }
 
 function saveAuthFile(auth: AuthFile) {
-	mkdirSync(dirname(AUTH_JSON_PATH), { recursive: true });
-	writeFileSync(AUTH_JSON_PATH, `${JSON.stringify(auth, null, 2)}\n`, "utf8");
+	mkdirSync(dirname(STORE_AUTH_PATH), { recursive: true });
+	writeFileSync(STORE_AUTH_PATH, `${JSON.stringify(auth, null, 2)}\n`, "utf8");
+	saveListener?.();
 }
 
-// The stored key for a provider: auth.json wins (pi gives stored credentials
-// priority over everything else), with the legacy inline apiKey as fallback.
+// The store's key for a provider: our auth file first, then a legacy inline
+// apiKey left over from an import.
 export function storedApiKey(providerId: string, provider: any): string | undefined {
-	if (SPLIT_AUTH) {
-		try {
-			const entry = loadAuthFile()[providerId];
-			if (entry && typeof entry === "object" && typeof entry.key === "string" && entry.key) {
-				return entry.key;
-			}
-		} catch {
-			// Unreadable auth.json — fall back to the inline key below.
+	try {
+		const entry = loadAuthFile()[providerId];
+		if (entry && typeof entry === "object" && typeof entry.key === "string" && entry.key) {
+			return entry.key;
 		}
+	} catch {
+		// Unreadable auth store — fall back to the inline key below.
 	}
 	const inline = typeof provider?.apiKey === "string" ? provider.apiKey : "";
 	return inline || undefined;
 }
 
-// Write a provider's api_key entry into auth.json, preserving all other
-// entries (other providers, oauth logins). No-op where keys stay inline.
 export function saveProviderApiKey(providerId: string, serializedKey: string) {
-	if (!SPLIT_AUTH) return;
 	const auth = loadAuthFile();
 	auth[providerId] = { type: "api_key", key: serializedKey };
 	saveAuthFile(auth);
 }
 
-// Drop a provider's auth.json entry along with the provider. Only api_key
-// entries are touched — an oauth login under the same id is left alone.
 export function removeProviderApiKey(providerId: string) {
-	if (!SPLIT_AUTH) return;
 	let auth: AuthFile;
 	try {
 		auth = loadAuthFile();
 	} catch {
 		return;
 	}
-	if (auth[providerId]?.type !== "api_key") return;
+	if (!(providerId in auth)) return;
 	delete auth[providerId];
 	saveAuthFile(auth);
 }
 
-// Carry a provider's auth.json entry over to its new id on rename.
 export function renameProviderApiKey(oldId: string, newId: string) {
-	if (!SPLIT_AUTH) return;
 	let auth: AuthFile;
 	try {
 		auth = loadAuthFile();
@@ -199,13 +108,10 @@ export function renameProviderApiKey(oldId: string, newId: string) {
 	saveAuthFile(auth);
 }
 
-// Move inline apiKeys into auth.json and strip them from the models config, so
-// the files end up split the way pi itself writes them. An existing auth.json
-// entry always wins over the inline value (pi resolves stored credentials
-// first anyway). auth.json is written BEFORE models.json so a failed write
-// never strands a key.
+// Move inline apiKeys into our auth file and strip them from the provider, so
+// keys and declarations never share a file. auth is written BEFORE the store so
+// a failed write never strands a key.
 function migrateInlineApiKeys(config: ModelsConfig) {
-	if (!SPLIT_AUTH) return;
 	const providers = config.providers ?? {};
 	const inline: Array<[string, string]> = [];
 	for (const [id, provider] of Object.entries(providers)) {
@@ -226,16 +132,20 @@ function migrateInlineApiKeys(config: ModelsConfig) {
 
 export function loadModelsConfig(): ModelsConfig {
 	ensureConfigDir();
-	if (!existsSync(MODELS_JSON_PATH)) {
+	if (!existsSync(STORE_PATH)) {
 		return { providers: {} };
 	}
-
-	const raw = readFileSync(MODELS_JSON_PATH, "utf8").trim();
+	const raw = readFileSync(STORE_PATH, "utf8").trim();
 	if (!raw) return { providers: {} };
 
-	const parsed = (IS_YAML_CONFIG ? parseYamlConfig(raw) : JSON.parse(raw)) as ModelsConfig;
+	let parsed: ModelsConfig;
+	try {
+		parsed = JSON.parse(raw) as ModelsConfig;
+	} catch (error) {
+		throw new Error(`${STORE_PATH} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+	}
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-		throw new Error("models config must be an object");
+		throw new Error(`${STORE_PATH} must be an object`);
 	}
 	if (!parsed.providers || typeof parsed.providers !== "object") {
 		parsed.providers = {};
@@ -243,34 +153,106 @@ export function loadModelsConfig(): ModelsConfig {
 	return parsed;
 }
 
-// Parse a models.yml. Prefers the yaml package; when it is missing (folder
-// copied into ~/.pi/agent/extensions/ without npm install) JSON is accepted,
-// because JSON is a valid YAML subset. Genuine YAML gets a clear error instead
-// of corrupting the file.
-function parseYamlConfig(raw: string): any {
-	if (yamlModule) return yamlModule.parse(raw);
-	try {
-		return JSON.parse(raw);
-	} catch {
-		throw new Error(
-			`${MODELS_JSON_PATH} is YAML, but the "yaml" package is not installed. ` +
-				'Run "npm install" in the better-custom folder, or reinstall the extension with "pi install", to edit YAML configs.',
-		);
-	}
-}
-
 export function saveModelsConfig(config: ModelsConfig) {
 	ensureConfigDir();
 	migrateInlineApiKeys(config);
-	let content: string;
-	if (IS_YAML_CONFIG) {
-		content = yamlModule
-			? yamlModule.stringify(config, { lineWidth: 0 })
-			: // JSON is valid YAML — writing it keeps OMP/pi able to load the config
-				// even when the yaml package is unavailable.
-				JSON.stringify(config, null, 2);
-	} else {
-		content = JSON.stringify(config, null, 2);
+	writeFileSync(STORE_PATH, `${JSON.stringify(config, null, 2).trimEnd()}\n`, "utf8");
+	saveListener?.();
+}
+
+// --- one-time import from pi's models.json -----------------------------------
+// pi's file mixes the user's own declarations with providers this extension
+// wrote before the split, and the two can't be told apart. So the import is
+// explicit: the user picks what to move, and the picked entries are removed
+// from models.json afterwards (their keys move out of pi's auth.json too).
+
+export type LegacyProvider = { id: string; provider: any; apiKey?: string };
+
+export function readLegacyProviders(): LegacyProvider[] {
+	let config: any;
+	try {
+		if (!existsSync(PI_MODELS_PATH)) return [];
+		const raw = readFileSync(PI_MODELS_PATH, "utf8").trim();
+		if (!raw) return [];
+		config = JSON.parse(raw);
+	} catch {
+		return [];
 	}
-	writeFileSync(MODELS_JSON_PATH, `${content.trimEnd()}\n`, "utf8");
+	const providers = config?.providers;
+	if (!providers || typeof providers !== "object") return [];
+
+	let auth: AuthFile = {};
+	try {
+		if (existsSync(PI_AUTH_PATH)) auth = JSON.parse(readFileSync(PI_AUTH_PATH, "utf8"));
+	} catch {
+		// Unreadable pi auth — the import simply carries no keys.
+	}
+
+	const out: LegacyProvider[] = [];
+	for (const [id, provider] of Object.entries(providers)) {
+		const entry = auth[id];
+		const apiKey =
+			entry && typeof entry === "object" && entry.type === "api_key" && typeof entry.key === "string"
+				? entry.key
+				: typeof (provider as any)?.apiKey === "string"
+					? (provider as any).apiKey
+					: undefined;
+		out.push({ id, provider, apiKey });
+	}
+	return out.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+// Move the given legacy ids into the store (prefixed) and drop them from
+// models.json. Returns the ids now in the store under their custom- names.
+export function importLegacyProviders(ids: string[]): { imported: string[]; skipped: string[] } {
+	const legacy = readLegacyProviders();
+	const wanted = new Set(ids);
+	const store = loadModelsConfig();
+	store.providers ||= {};
+	const auth = loadAuthFile();
+	const imported: string[] = [];
+	const skipped: string[] = [];
+
+	for (const entry of legacy) {
+		if (!wanted.has(entry.id)) continue;
+		const newId = ensureCustomId(entry.id);
+		if (store.providers[newId]) {
+			skipped.push(entry.id);
+			continue;
+		}
+		const provider = JSON.parse(JSON.stringify(entry.provider));
+		delete provider.apiKey;
+		store.providers[newId] = provider;
+		if (entry.apiKey && !(newId in auth)) auth[newId] = { type: "api_key", key: entry.apiKey };
+		imported.push(newId);
+	}
+	if (imported.length === 0) return { imported, skipped };
+
+	saveAuthFile(auth);
+	writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2).trimEnd()}\n`, "utf8");
+
+	// Remove the moved entries from pi's files. Both are the user's files, so
+	// this only ever touches the ids they picked.
+	try {
+		const raw = readFileSync(PI_MODELS_PATH, "utf8");
+		const piConfig = JSON.parse(raw);
+		for (const id of ids) delete piConfig?.providers?.[id];
+		writeFileSync(PI_MODELS_PATH, `${JSON.stringify(piConfig, null, 2).trimEnd()}\n`, "utf8");
+	} catch {
+		// Leave pi's file alone if it can't be read/parsed.
+	}
+	try {
+		if (existsSync(PI_AUTH_PATH)) {
+			const piAuth = JSON.parse(readFileSync(PI_AUTH_PATH, "utf8"));
+			for (const id of ids) {
+				if (piAuth?.[id]?.type === "api_key") delete piAuth[id];
+			}
+			writeFileSync(PI_AUTH_PATH, `${JSON.stringify(piAuth, null, 2).trimEnd()}\n`, "utf8");
+		}
+	} catch {
+		// Same: the import itself already succeeded.
+	}
+
+	saveListener?.();
+	return { imported, skipped };
 }

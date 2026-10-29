@@ -18,6 +18,11 @@ pi install /path/to/better-custom                              # local checkout
 Use `pi install` rather than copying the folder into
 `~/.pi/agent/extensions/`: it runs `npm install` for the runtime dependencies.
 
+> **Since 2.0 the storage is separate.** Custom providers no longer live in pi's
+> `models.json`; they are kept in the extension's own files and injected into pi
+> with `pi.registerProvider()` at load time. Entries an older version wrote into
+> `models.json` can be moved over in one step from the `/custom-provider` menu.
+
 ## Quick start
 
 Run `/custom-provider` in pi and pick one of three actions.
@@ -78,13 +83,20 @@ Endpoints that reject the OpenAI `developer` role are detected once and get
 
 ## Where providers are stored
 
-Everything lives in pi's agent directory (`~/.pi/agent/`):
+The extension keeps its own files in pi's agent directory (`~/.pi/agent/`) and
+never writes pi's `models.json` / `auth.json`. At load time every stored
+provider is injected into pi with `pi.registerProvider()`, so it shows up in
+`/model` exactly like a native one while the storage stays separate.
 
 | File | Contents |
 | --- | --- |
-| `models.json` | Provider declarations: `baseUrl`, `api`, `compat`, and the model list with each model's metadata. This is what pi reads. |
-| `auth.json` | API keys, keyed by provider id — the same file `/login` writes, never duplicated into `models.json`. Deleting a provider removes its entry; renaming moves it. |
-| `custom-provider-sync.json` | Which providers track models.dev, which model ids that mirror owns, and which the user suppressed. Only bookkeeping — models themselves stay in `models.json`. |
+| `custom-providers.json` | This extension's providers: `baseUrl`, `api`, `compat`, and the model list with each model's metadata. |
+| `custom-providers-auth.json` | Their API keys, keyed by provider id. Deleting a provider removes its entry; renaming moves it. |
+| `custom-provider-sync.json` | Which providers track models.dev, which model ids that mirror owns, and which the user suppressed. Only bookkeeping. |
+
+Every custom provider id gets a `custom-` prefix (`ustc` is stored as
+`custom-ustc`), so a custom provider can never clash with a built-in one in
+`/model` or `/login` — the prefix is the marker that tells them apart.
 
 Providers added from the models.dev catalog keep mirroring it: at each session
 start (in the background, never blocking startup) new catalog models are added,
@@ -93,23 +105,24 @@ Models you deselected or deleted are never re-added, and hand-added models are
 left alone. Delete a provider's entry from `custom-provider-sync.json` (or the
 whole file) to freeze it into a plain static provider.
 
-OMP keeps providers and keys inline in `models.yml` / `models.yaml` instead.
-Saving YAML rewrites formatting and drops comments.
+### Coming from an older version
+
+Versions before 2.0 wrote into pi's `models.json` and `auth.json`. If entries
+are still there, `/custom-provider` shows a **Move N providers out of
+models.json** action: pick what to move, and those providers (plus their keys)
+are copied into the extension's own store under their `custom-` names and
+removed from pi's files. Anything you didn't pick stays untouched.
 
 `models-store.json` is pi's own cache for built-in providers — custom models do
 not belong there and this extension never writes to it.
 
 ## Things to know
 
-- **Don't reuse a built-in provider id.** Naming your provider `deepseek` or
-  `openai` does not replace the built-in: pi merges both, so built-in models
-  stay visible even after you delete them, and `auth.json` is keyed by id, so
-  `/login` / `/logout` for the built-in also touch your key. The wizard offers
-  a one-click rename to `<id>-custom` when it notices, and marks colliding ids
-  with `⚠ built-in id`.
 - **Offline is fine.** Probing, catalog lookups and the background sync all
   fail soft — you can add models by hand with no network at all.
 - **Keys are write-only.** Stored keys are never read back into a prompt.
+- **Changing files by hand is safe.** Edit `custom-providers.json` and run
+  `/reload`: the extension re-registers everything from the store.
 
 ## Development
 

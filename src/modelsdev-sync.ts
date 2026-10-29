@@ -12,8 +12,8 @@
 //                deleted afterwards. Never re-added, so a sync can't resurrect
 //                a model the user got rid of.
 //
-// State lives in custom-provider-sync.json next to models.json; the models
-// themselves stay in models.json (pi's own config), so nothing here is needed
+// State lives in custom-provider-sync.json next to custom-providers.json; the
+// models themselves stay in custom-providers.json, so nothing here is needed
 // to make a provider work.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -34,10 +34,6 @@ export type ManagedProvider = {
 };
 
 type SyncState = { autoUpdate?: Record<string, ManagedProvider> };
-
-// Anything with a model registry — matches both ExtensionContext (event
-// handlers) and ExtensionCommandContext (command handlers).
-type RegistryCtx = { modelRegistry?: { refresh?: () => Promise<unknown> } };
 
 export function loadSyncState(): SyncState {
 	try {
@@ -153,7 +149,7 @@ export type SyncResult = { added: number; updated: number; removed: number };
 // One provider's sync. Returns null when the provider isn't mirrored (or has
 // disappeared), and throws when the catalog can't be reached so callers can
 // decide how loud to be.
-export async function syncProvider(ctx: RegistryCtx | undefined, providerId: string): Promise<SyncResult | null> {
+export async function syncProvider(providerId: string): Promise<SyncResult | null> {
 	const managed = managedProvider(providerId);
 	if (!managed) return null;
 
@@ -204,30 +200,19 @@ export async function syncProvider(ctx: RegistryCtx | undefined, providerId: str
 	state.autoUpdate[providerId] = managed;
 	saveSyncState(state);
 
-	if (result.added > 0 || result.updated > 0 || result.removed > 0) {
-		saveModelsConfig(config);
-		await refreshRegistry(ctx);
-	}
+	if (result.added > 0 || result.updated > 0 || result.removed > 0) saveModelsConfig(config);
 	return result;
-}
-
-async function refreshRegistry(ctx: RegistryCtx | undefined): Promise<void> {
-	try {
-		await ctx?.modelRegistry?.refresh?.();
-	} catch {
-		// The config is on disk; a stale in-memory snapshot fixes itself on restart.
-	}
 }
 
 // Sync every mirrored provider. Catalog failures are swallowed: startup must
 // never be blocked (or noisy) because models.dev is unreachable.
-export async function syncAllManaged(ctx: RegistryCtx | undefined): Promise<Array<{ providerId: string; result: SyncResult }>> {
+export async function syncAllManaged(): Promise<Array<{ providerId: string; result: SyncResult }>> {
 	const state = loadSyncState();
 	const ids = Object.keys(state.autoUpdate ?? {});
 	const changed: Array<{ providerId: string; result: SyncResult }> = [];
 	for (const providerId of ids) {
 		try {
-			const result = await syncProvider(ctx, providerId);
+			const result = await syncProvider(providerId);
 			if (result && (result.added > 0 || result.updated > 0 || result.removed > 0)) changed.push({ providerId, result });
 		} catch {
 			// Offline / catalog down — try again next session.

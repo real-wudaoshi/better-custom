@@ -11,7 +11,7 @@ import {
 	resolveModelInfo,
 } from "model-probe";
 import { resolveApiKeyForProbe, serializeApiKey } from "../api-key.ts";
-import { BUILTIN_PROVIDER_IDS, loadModelsConfig, MODELS_JSON_PATH, removeProviderApiKey, saveModelsConfig, saveProviderApiKey } from "../config.ts";
+import { loadModelsConfig, STORE_PATH, removeProviderApiKey, saveModelsConfig, saveProviderApiKey } from "../config.ts";
 import { unmarkManaged } from "../modelsdev-sync.ts";
 import { buildModelEntry, modelIdOf, modelOptionsFromProbe, readModelOptions } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
@@ -39,7 +39,7 @@ export async function mutateProvider(
 	try {
 		config = loadModelsConfig();
 	} catch (error) {
-		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return false;
 	}
 	const provider = config.providers?.[providerId];
@@ -54,24 +54,10 @@ export async function mutateProvider(
 	try {
 		saveModelsConfig(config);
 	} catch (error) {
-		ctx.ui.notify(`Could not write ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		ctx.ui.notify(`Could not write ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return false;
 	}
-	await refreshModelRegistry(ctx);
 	return true;
-}
-
-// pi reads models.json once at startup and keeps it in memory. After every
-// write, reload it into the running session so added/removed models show up
-// in /model immediately instead of after a restart. Best-effort: the file is
-// already saved, a failed refresh must not fail the mutation.
-export async function refreshModelRegistry(ctx: CommandContext): Promise<void> {
-	try {
-		await ctx.modelRegistry?.refresh();
-	} catch {
-		// The config is on disk; a stale in-memory snapshot fixes itself on
-		// restart, so a refresh failure is not worth an error dialog.
-	}
 }
 
 // Mutate a single model entry in place and save.
@@ -101,10 +87,7 @@ export function describeProviderInline(providerId: string, provider: any): { lab
 	const modelCount = Array.isArray(provider?.models) ? provider.models.length : 0;
 	const endpoint = typeof provider?.baseUrl === "string" ? provider.baseUrl : "(no baseUrl)";
 	const api = typeof provider?.api === "string" ? provider.api : "(no api)";
-	// Flag ids that collide with pi's built-in providers — merging and shared
-	// auth surprise users otherwise (see BUILTIN_COLLISION_WARNING).
-	const collision = BUILTIN_PROVIDER_IDS.has(providerId) ? " • ⚠ built-in id" : "";
-	const suffix = ` • ${api} • ${endpoint} • ${modelCount} model${modelCount === 1 ? "" : "s"}${collision}`;
+	const suffix = ` • ${api} • ${endpoint} • ${modelCount} model${modelCount === 1 ? "" : "s"}`;
 	return {
 		label: providerId,
 		suffix,
@@ -167,7 +150,7 @@ export async function removeProvider(ctx: CommandContext, providerId: string): P
 	try {
 		config = loadModelsConfig();
 	} catch (error) {
-		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return false;
 	}
 	if (!config.providers?.[providerId]) {
@@ -178,20 +161,19 @@ export async function removeProvider(ctx: CommandContext, providerId: string): P
 	try {
 		saveModelsConfig(config);
 	} catch (error) {
-		ctx.ui.notify(`Could not write ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		ctx.ui.notify(`Could not write ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return false;
 	}
-	await refreshModelRegistry(ctx);
-	// Drop the auth.json entry along with the provider so no orphan key stays
+	// Drop the stored key along with the provider so no orphan key stays
 	// behind. Best-effort: a failing auth write must not undo the deletion.
 	try {
 		removeProviderApiKey(providerId);
 	} catch (error) {
-		ctx.ui.notify(`Provider deleted, but its auth.json entry could not be removed: ${error instanceof Error ? error.message : String(error)}`, "warning");
+		ctx.ui.notify(`Provider deleted, but its stored key could not be removed: ${error instanceof Error ? error.message : String(error)}`, "warning");
 	}
 	// Forget any models.dev mirror attached to this provider.
 	unmarkManaged(providerId);
-	ctx.ui.notify(`Deleted provider "${providerId}" from ${MODELS_JSON_PATH}`, "info");
+	ctx.ui.notify(`Deleted provider "${providerId}" from ${STORE_PATH}`, "info");
 	return true;
 }
 
@@ -199,7 +181,7 @@ export async function persistProvider(ctx: CommandContext, providerId: string, p
 	try {
 		config = loadModelsConfig();
 	} catch (error) {
-		ctx.ui.notify(`Could not read ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return false;
 	}
 
@@ -215,16 +197,15 @@ export async function persistProvider(ctx: CommandContext, providerId: string, p
 	try {
 		saveModelsConfig(config);
 	} catch (error) {
-		ctx.ui.notify(`Could not write ${MODELS_JSON_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		ctx.ui.notify(`Could not write ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
 		return false;
 	}
-	await refreshModelRegistry(ctx);
 	return true;
 }
 
-// Write a provider's key into auth.json (pi's official credential file, the
-// one /login writes). Call AFTER persistProvider succeeds. No-op where keys
-// stay inline (OMP) or nothing was entered.
+// Write a provider's key into custom-providers-auth.json (this extension's
+// own credential file). Call AFTER persistProvider succeeds. No-op when
+// nothing was entered.
 export function persistApiKey(
 	ctx: CommandContext,
 	providerId: string,
@@ -238,7 +219,7 @@ export function persistApiKey(
 		return true;
 	} catch (error) {
 		ctx.ui.notify(
-			`Provider saved, but the API key could not be written to auth.json: ${error instanceof Error ? error.message : String(error)}. Run "/login ${providerId}" to set it.`,
+			`Provider saved, but the API key could not be written to custom-providers-auth.json: ${error instanceof Error ? error.message : String(error)}`,
 			"warning",
 		);
 		return false;

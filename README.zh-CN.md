@@ -17,6 +17,10 @@ pi install /path/to/better-custom                              # 本地目录
 建议用 `pi install` 而不是把目录拷进 `~/.pi/agent/extensions/`——它会顺带
 `npm install` 运行时依赖。
 
+> **2.0 起存储独立**:自定义 provider 不再写进 pi 的 `models.json`,而是存在
+> 扩展自己的文件里,加载时通过 `pi.registerProvider()` 注入 pi。老版本写在
+> `models.json` 里的条目,可以在 `/custom-provider` 菜单里一次性搬过来。
+
 ## 快速上手
 
 在 pi 里运行 `/custom-provider`,然后三选一。
@@ -73,13 +77,20 @@ Responses、Anthropic Messages、Gemini、Ollama),输入 URL、命名、粘贴 k
 
 ## provider 存在哪里
 
-全部在 pi 的 agent 目录(`~/.pi/agent/`)下:
+扩展把 provider 存在 pi 的 agent 目录(`~/.pi/agent/`)下的**自己文件**里,
+从不写 pi 的 `models.json` / `auth.json`。加载时每个 provider 通过
+`pi.registerProvider()` 注入 pi,所以 `/model` 里看起来和内置 provider 一样,
+但存储是分开的。
 
 | 文件 | 内容 |
 | --- | --- |
-| `models.json` | provider 声明:`baseUrl`、`api`、`compat`,以及模型列表和各模型元数据。pi 读的是这个文件。 |
-| `auth.json` | API key,以 provider id 为键——和 `/login` 写的是同一个文件,不会重复写进 `models.json`。删除 provider 会删掉对应条目,重命名会迁移。 |
-| `custom-provider-sync.json` | 哪些 provider 在跟踪 models.dev、镜像拥有哪些模型 id、哪些被用户抑制。只是记账,模型本身仍在 `models.json`。 |
+| `custom-providers.json` | 本扩展的 provider:`baseUrl`、`api`、`compat`,以及模型列表和各模型元数据。 |
+| `custom-providers-auth.json` | 它们的 API key,以 provider id 为键。删除 provider 会删条目,重命名会迁移。 |
+| `custom-provider-sync.json` | 哪些 provider 在跟踪 models.dev、镜像拥有哪些模型 id、哪些被用户抑制。只是记账。 |
+
+自定义 provider 的 id 一律带 `custom-` 前缀(`ustc` 会存成 `custom-ustc`),
+所以在 `/model`、`/login` 里永远不会和内置 provider 冲突——这个前缀就是
+区分标记。
 
 从 models.dev 目录添加的 provider 会持续镜像该目录:每次会话启动时
 (后台进行,不阻塞启动)添加目录里新发布的模型、刷新元数据和价格、移除
@@ -87,22 +98,23 @@ Responses、Anthropic Messages、Gemini、Ollama),输入 URL、命名、粘贴 k
 也不受影响。想让它变回普通静态 provider,把 `custom-provider-sync.json`
 里对应条目(或整个文件)删掉即可。
 
-OMP 则把 provider 和密钥内联存在 `models.yml` / `models.yaml` 里。保存 YAML
-会重写格式并丢弃注释。
+### 从老版本升级
+
+2.0 之前扩展写的是 pi 的 `models.json` / `auth.json`。如果里面还有条目,
+`/custom-provider` 菜单会多出 **Move N providers out of models.json**:
+选中要搬的,它们(连同 key)会以 `custom-` 名字进扩展自己的存储,并从 pi
+的文件里移除。没选中的条目保持原样。
 
 `models-store.json` 是 pi 给内置 provider 用的缓存,自定义模型不该放在那里,
 本扩展也不会写它。
 
 ## 注意事项
 
-- **别复用内置 provider id。** 把 provider 命名成 `deepseek`、`openai`
-  并不会替换内置的:pi 会把两者合并,内置模型即使你删了也仍然可见;而且
-  `auth.json` 以 id 为键,对内置 provider 执行 `/login` / `/logout` 会连你的
-  key 一起动。向导发现撞车时会提供一键改名为 `<id>-custom`,并在列表里标
-  `⚠ built-in id`。
 - **离线也能用。** 探测、目录查询、后台同步失败都不会打断你,完全断网时
   仍然可以手动添加模型。
 - **密钥只写不可读。** 已保存的 key 不会被读回输入框。
+- **手改文件也没问题。** 直接编辑 `custom-providers.json` 后 `/reload`,
+  扩展会按文件内容重新注册。
 
 ## 开发
 

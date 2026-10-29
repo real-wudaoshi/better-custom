@@ -1,4 +1,4 @@
-import { BUILTIN_COLLISION_WARNING, BUILTIN_PROVIDER_IDS, loadModelsConfig } from "../config.ts";
+import { CUSTOM_PREFIX, ensureCustomId, loadModelsConfig } from "../config.ts";
 import { describeProbeInfo, resolveModelInfo } from "model-probe";
 import { REASONING_LEVELS } from "../types.ts";
 import type { ApiKeyMode, CommandContext, ModelOptions, ProviderApi, ProviderStyle, ReasoningCeiling, SelectItem } from "../types.ts";
@@ -9,13 +9,13 @@ export async function promptApiKey(
 	ctx: CommandContext,
 ): Promise<{ mode: ApiKeyMode; value?: string } | null> {
 	const choice = await selectOne(ctx, "API key", [
-		{ value: "literal", label: "API key", description: "Stored in auth.json, like pi's own /login credentials" },
+		{ value: "literal", label: "API key", description: "Stored in custom-providers-auth.json, separate from pi's auth.json" },
 		{ value: "none", label: "None", description: "No key; a placeholder is written so the provider still loads" },
 	]);
 	if (!choice) return null;
 	if (choice === "none") return { mode: "none" };
 
-	const value = await ctx.ui.input("API key", "saved in auth.json under the provider id");
+	const value = await ctx.ui.input("API key", "saved in custom-providers-auth.json under the provider id");
 	if (value === undefined) return null;
 	const trimmed = value.trim();
 	if (!trimmed) return { mode: "none" };
@@ -243,17 +243,19 @@ export async function promptProviderId(ctx: CommandContext, normalizedEndpoint: 
 		// If config can't be read, persistProvider surfaces the error later.
 	}
 
-	const providerIdSuggestion = suggestion ?? suggestProviderId(normalizedEndpoint);
+	// Everything this extension stores lives under "custom-", which is the
+	// visible marker in /model and makes a clash with a built-in id impossible.
+	const providerIdSuggestion = ensureCustomId(slugify(suggestion ?? suggestProviderId(normalizedEndpoint)));
 	const suggestionTaken = existingIds.has(providerIdSuggestion);
 
 	while (true) {
 		const providerNameInput = await ctx.ui.input(
 			suggestionTaken ? "Provider name (must be unique)" : `Provider name (blank = ${providerIdSuggestion})`,
-			"e.g. custom-example-com",
+			`e.g. ${providerIdSuggestion}`,
 		);
 		if (providerNameInput === undefined) return null;
-		const providerId = slugify(providerNameInput.trim() || providerIdSuggestion);
-		if (!providerId) {
+		const providerId = ensureCustomId(slugify(providerNameInput.trim() || providerIdSuggestion));
+		if (!providerId || providerId === CUSTOM_PREFIX) {
 			ctx.ui.notify("Provider name is required.", "error");
 			continue;
 		}
@@ -263,39 +265,6 @@ export async function promptProviderId(ctx: CommandContext, normalizedEndpoint: 
 			ctx.ui.notify(`Provider "${providerId}" already exists. Choose a different name.`, "warning");
 			continue;
 		}
-
-		if (BUILTIN_PROVIDER_IDS.has(providerId)) {
-			const resolved = await resolveBuiltinCollision(ctx, providerId);
-			if (resolved === null) continue;
-			if (existingIds.has(resolved)) {
-				ctx.ui.notify(`Provider "${resolved}" already exists. Choose a different name.`, "warning");
-				continue;
-			}
-			return resolved;
-		}
 		return providerId;
 	}
-}
-
-// One-click way out when an id collides with a built-in provider: rename to
-// "<id>-custom", keep the collision (deliberate built-in extension), or go
-// back and pick another name. Returns the id to use, or null to re-prompt.
-export async function resolveBuiltinCollision(ctx: CommandContext, providerId: string): Promise<string | null> {
-	const suggested = `${providerId}-custom`;
-	const choice = await selectOne(ctx, `"${providerId}" collides with a built-in provider`, [
-		{
-			value: "rename",
-			label: `Use "${suggested}" instead`,
-			description: "Recommended — your models and key stay fully separate from the built-in provider",
-		},
-		{
-			value: "keep",
-			label: `Keep "${providerId}"`,
-			description: `Extend the built-in on purpose. ${BUILTIN_COLLISION_WARNING}`,
-		},
-		{ value: "back", label: "Pick another name", description: "Go back and enter a different provider name" },
-	]);
-	if (choice === "rename") return suggested;
-	if (choice === "keep") return providerId;
-	return null;
 }
