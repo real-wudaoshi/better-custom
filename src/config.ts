@@ -18,18 +18,28 @@ export const PI_AUTH_PATH = join(AGENT_DIR, "auth.json");
 
 // Every custom provider id carries this prefix. It is the visible marker that
 // separates our providers from pi's built-ins in /model and /login, and it
-// makes an id collision with a built-in provider impossible.
-export const CUSTOM_PREFIX = "custom-";
+// makes an id collision with a built-in provider impossible. A dot rather than
+// a slash: pi parses model references as "provider/model" splitting at the
+// FIRST slash, so a slash inside a provider id cannot be referenced at all
+// (verified against pi's resolveModelReference).
+export const CUSTOM_PREFIX = "custom.";
+// Prefixes older versions wrote. Accepted on input and renamed in the store.
+const LEGACY_PREFIXES = ["custom-"];
 
 export function isCustomId(id: string): boolean {
 	return id.startsWith(CUSTOM_PREFIX);
 }
 
-// Normalize any user/legacy id into our namespace: "Ustc Relay" -> "custom-ustc-relay".
+// Normalize any user/legacy id into our namespace: "Ustc Relay" -> "custom.ustc-relay".
+// An id already carrying a known prefix (custom. or the legacy custom-) keeps
+// its marker stripped and re-added, so both spellings land on the same id.
 export function ensureCustomId(id: string): string {
-	const trimmed = id.trim();
-	const stripped = isCustomId(trimmed) ? trimmed.slice(CUSTOM_PREFIX.length) : trimmed;
-	return `${CUSTOM_PREFIX}${stripped}`;
+	let trimmed = id.trim();
+	if (isCustomId(trimmed)) trimmed = trimmed.slice(CUSTOM_PREFIX.length);
+	for (const legacy of LEGACY_PREFIXES) {
+		if (trimmed.startsWith(legacy)) trimmed = trimmed.slice(legacy.length);
+	}
+	return `${CUSTOM_PREFIX}${trimmed}`;
 }
 
 function ensureConfigDir() {
@@ -106,6 +116,51 @@ export function renameProviderApiKey(oldId: string, newId: string) {
 	if (!(newId in auth)) auth[newId] = auth[oldId];
 	delete auth[oldId];
 	saveAuthFile(auth);
+}
+
+// Rename ids written with an older marker (custom-foo -> custom.foo) in both
+// files. Called once at load, before the first registration. Returns true when
+// anything changed.
+export function normalizeStoreIds(): boolean {
+	let store: ModelsConfig;
+	try {
+		store = loadModelsConfig();
+	} catch {
+		return false;
+	}
+	const providers = store.providers ?? {};
+	const renames: Array<[string, string]> = [];
+	for (const id of Object.keys(providers)) {
+		if (isCustomId(id)) continue;
+		const renamed = ensureCustomId(id);
+		if (renamed === id || providers[renamed]) continue;
+		renames.push([id, renamed]);
+	}
+	if (renames.length === 0) return false;
+
+	const rebuilt: Record<string, any> = {};
+	for (const [id, provider] of Object.entries(providers)) {
+		const hit = renames.find(([old]) => old === id);
+		rebuilt[hit ? hit[1] : id] = provider;
+	}
+	store.providers = rebuilt;
+	writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2).trimEnd()}\n`, "utf8");
+
+	try {
+		const auth = loadAuthFile();
+		let authChanged = false;
+		for (const [old, renamed] of renames) {
+			if (!(old in auth) || renamed in auth) continue;
+			auth[renamed] = auth[old];
+			delete auth[old];
+			authChanged = true;
+		}
+		if (authChanged) writeFileSync(STORE_AUTH_PATH, `${JSON.stringify(auth, null, 2).trimEnd()}\n`, "utf8");
+	} catch {
+		// Keys stay under the old id; the provider still registers, pi just
+		// reports the missing credential and the user can re-enter it.
+	}
+	return true;
 }
 
 // Move inline apiKeys into our auth file and strip them from the provider, so
@@ -203,7 +258,7 @@ export function readLegacyProviders(): LegacyProvider[] {
 }
 
 // Move the given legacy ids into the store (prefixed) and drop them from
-// models.json. Returns the ids now in the store under their custom- names.
+// models.json. Returns the ids now in the store under their custom. names.
 export function importLegacyProviders(ids: string[]): { imported: string[]; skipped: string[] } {
 	const legacy = readLegacyProviders();
 	const wanted = new Set(ids);

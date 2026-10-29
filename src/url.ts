@@ -69,8 +69,8 @@ export function slugify(value: string): string {
 export function suggestProviderId(endpoint: string): string {
 	const url = new URL(addDefaultScheme(endpoint));
 	const host = url.hostname.replace(/^www\./, "").replace(/^api\./, "");
-	const hostSlug = slugify(`${host}${url.port ? `-${url.port}` : ""}`) || "provider";
-	return `custom-${hostSlug}`;
+	// Bare slug — the "custom." marker is added centrally by ensureCustomId.
+	return slugify(`${host}${url.port ? `-${url.port}` : ""}`) || "provider";
 }
 
 export function dedupe(values: string[]): string[] {

@@ -88,9 +88,11 @@ Responses、Anthropic Messages、Gemini、Ollama),输入 URL、命名、粘贴 k
 | `custom-providers-auth.json` | 它们的 API key,以 provider id 为键。删除 provider 会删条目,重命名会迁移。 |
 | `custom-provider-sync.json` | 哪些 provider 在跟踪 models.dev、镜像拥有哪些模型 id、哪些被用户抑制。只是记账。 |
 
-自定义 provider 的 id 一律带 `custom-` 前缀(`ustc` 会存成 `custom-ustc`),
+自定义 provider 的 id 一律带 `custom.` 前缀(`ustc` 会存成 `custom.ustc`),
 所以在 `/model`、`/login` 里永远不会和内置 provider 冲突——这个前缀就是
-区分标记。
+区分标记。引用模型时就写成 `custom.ustc/deepseek-v4-pro`。之所以用点号
+而不是斜杠:pi 解析 `provider/model` 时从**第一个**斜杠处切分,provider id
+里带斜杠会导致该模型无法被引用。
 
 从 models.dev 目录添加的 provider 会持续镜像该目录:每次会话启动时
 (后台进行,不阻塞启动)添加目录里新发布的模型、刷新元数据和价格、移除

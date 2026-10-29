@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { readLegacyProviders } from "./src/config.ts";
+import { importLegacyProviders, normalizeStoreIds, readLegacyProviders } from "./src/config.ts";
 import { addProviderFlow } from "./src/flows/add.ts";
 import { deleteProviderFlow } from "./src/flows/delete.ts";
 import { editProviderFlow } from "./src/flows/edit.ts";
@@ -13,6 +13,9 @@ export default function customProviderWizard(pi: ExtensionAPI) {
 	// them because we register them. Bind first, then inject what is stored,
 	// then keep the registry in step with every later write.
 	bindRegistrationApi(pi);
+	// Ids written before the marker changed (custom-foo) are rewritten to the
+	// current spelling (custom.foo) before anything is registered.
+	normalizeStoreIds();
 	refreshRegistrations();
 
 	pi.registerCommand("custom-provider", {

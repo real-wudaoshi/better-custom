@@ -1,7 +1,7 @@
 // One-time import of providers that still live in pi's models.json. The store
 // is the extension's own now; this moves picked entries (and their keys) over
 // and takes them out of pi's files.
-import { importLegacyProviders, readLegacyProviders } from "../config.ts";
+import { ensureCustomId, importLegacyProviders, readLegacyProviders } from "../config.ts";
 import type { CommandContext } from "../types.ts";
 import { pickMany } from "../ui/select.ts";
 
@@ -27,7 +27,7 @@ export async function migrateLegacyFlow(ctx: CommandContext): Promise<void> {
 	);
 	if (!picked || picked.length === 0) return;
 
-	const target = (id: string) => (id.startsWith("custom-") ? id : `custom-${id}`);
+	const target = (id: string) => ensureCustomId(id);
 	const confirmed = await ctx.ui.confirm(
 		"Move providers?",
 		`Move ${picked.length} provider${picked.length === 1 ? "" : "s"} into this extension's own store:\n` +

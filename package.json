@@ -1,6 +1,6 @@
 {
   "name": "better-custom-provider",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Custom provider wizard for pi: add, probe, edit and sync custom LLM providers in its own store",
   "type": "module",
   "keywords": [

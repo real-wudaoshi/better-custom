@@ -212,7 +212,7 @@ async function renameProvider(ctx: CommandContext, providerId: string): Promise<
 	if (input === undefined) return null;
 	// Slugify so names stay consistent with the Add flow.
 	// Every id lives in our own namespace, so a rename can never collide with a
-	// built-in provider. Typing "foo" (or "custom-foo") both land on "custom-foo".
+	// built-in provider. Typing "foo", "custom.foo" or "custom-foo" all land on "custom.foo".
 	let newId = ensureCustomId(slugify(input.trim()));
 	if (!newId || newId === providerId) return null;
 

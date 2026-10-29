@@ -94,9 +94,12 @@ provider is injected into pi with `pi.registerProvider()`, so it shows up in
 | `custom-providers-auth.json` | Their API keys, keyed by provider id. Deleting a provider removes its entry; renaming moves it. |
 | `custom-provider-sync.json` | Which providers track models.dev, which model ids that mirror owns, and which the user suppressed. Only bookkeeping. |
 
-Every custom provider id gets a `custom-` prefix (`ustc` is stored as
-`custom-ustc`), so a custom provider can never clash with a built-in one in
-`/model` or `/login` — the prefix is the marker that tells them apart.
+Every custom provider id gets a `custom.` prefix (`ustc` is stored as
+`custom.ustc`), so a custom provider can never clash with a built-in one in
+`/model` or `/login` — the prefix is the marker that tells them apart. Models
+then reference as `custom.ustc/deepseek-v4-pro`; a dot rather than a slash
+because pi parses `provider/model` at the first slash, so a slash inside a
+provider id would make it unreferenceable.
 
 Providers added from the models.dev catalog keep mirroring it: at each session
 start (in the background, never blocking startup) new catalog models are added,
