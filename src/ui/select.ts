@@ -217,7 +217,7 @@ export async function pickTriState(
 				}
 
 				add();
-				add(theme.fg("dim", " Type to search • ↑↓ move (wraps) • space toggle • enter confirm • backspace delete • esc cancel"));
+				add(theme.fg("dim", " Type to search • ↑↓ move • space toggle • a all shown • n clear all • enter confirm • esc cancel"));
 				add(theme.fg("dim", ` ${legend}`));
 				add(border);
 
@@ -258,14 +258,25 @@ export async function pickTriState(
 					done(null);
 					return;
 				}
-				if (data === "007f" || data === "\b") {
+				// Select all shown / clear all — a big catalog is unusable otherwise.
+				if (data === "a") {
+					for (const item of visibleItems) state.set(item.value, item.states[item.states.length - 1]);
+					refresh();
+					return;
+				}
+				if (data === "n") {
+					for (const item of items) state.set(item.value, "off");
+					refresh();
+					return;
+				}
+				if (data === "\u007f" || data === "\b") {
 					if (query.length > 0) {
 						query = query.slice(0, -1);
 						refresh();
 					}
 					return;
 				}
-				if (data >= " " && data !== "001b" && data !== "\r" && data !== "\n") {
+				if (data >= " " && data !== "\u001b" && data !== "\r" && data !== "\n") {
 					query += data;
 					cursor = 0;
 					refresh();
@@ -317,8 +328,7 @@ export async function pickMany(
 				add(border);
 				add(` ${theme.fg("accent", theme.bold(title))}`);
 				add(` ${theme.fg("text", `Search: ${query || "-"}`)}`);
-				add(` ${theme.fg("muted", `${selected.size} selected • ${visibleItems.length}/${items.length} shown`)}`);
-				add();
+				add(` ${theme.fg("muted", `${selected.size} selected • ${visibleItems.length}/${items.length} shown`)}`);				add();
 
 				if (visibleItems.length === 0) {
 					add(theme.fg("warning", " No matching models."));
@@ -344,7 +354,7 @@ export async function pickMany(
 				}
 
 				add();
-				add(theme.fg("dim", " Type to search • ↑↓ move (wraps) • space toggle • enter confirm • backspace delete • esc cancel"));
+				add(theme.fg("dim", " Type to search • ↑↓ move • space toggle • a all shown • n clear all • enter confirm • esc cancel"));
 				if (selected.size === 0) {
 					add(theme.fg("warning", " Select at least one model before confirming."));
 				}
@@ -384,6 +394,18 @@ export async function pickMany(
 				}
 				if (matchesKey(data, Key.escape)) {
 					done(null);
+					return;
+				}
+				// Select all shows only what the filter shows; clearing drops the
+				// whole selection so filtered-out models can't be adopted by mistake.
+				if (data === "a") {
+					for (const item of visibleItems) selected.add(item.value);
+					refresh();
+					return;
+				}
+				if (data === "n") {
+					selected.clear();
+					refresh();
 					return;
 				}
 				if (data === "\u007f" || data === "\b") {

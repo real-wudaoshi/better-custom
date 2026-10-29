@@ -75,6 +75,10 @@ or **Delete provider**.
    - **Add manually** — type an id, adjust its metadata menu (reasoning / image
      / context window / max output), confirm, next id; blank or esc finishes.
 
+Model pickers: type to filter, `space` toggles one row, `a` selects everything
+the filter currently shows, `n` clears the whole selection, `enter` confirms
+(nothing is written before that), `esc` cancels.
+
 ### Edit
 
 Pick a provider, then: **Re-probe for models** (reconcile as above),
