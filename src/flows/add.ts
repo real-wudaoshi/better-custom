@@ -142,22 +142,14 @@ async function addFromCatalog(ctx: CommandContext) {
 		"info",
 	);
 
-	// The catalog is the source of truth on this path, so keeping the provider
-	// in sync is the natural default. Models the user did NOT pick here are
-	// recorded as suppressed — a later sync adds newly published models without
-	// resurrecting the ones skipped on purpose.
+	// The catalog is the source of truth on this path, so the provider mirrors
+	// it from now on: a sync at session start adds newly published models,
+	// refreshes metadata/prices, and drops what the catalog dropped. Models the
+	// user did NOT pick here are recorded as suppressed, so a later sync adds
+	// new models without resurrecting the ones skipped on purpose.
 	if (catalog.size > 0) {
-		const autoUpdate = await ctx.ui.confirm(
-			"Auto-update from models.dev?",
-			`Keep "${providerId}" in sync with the ${provider.name} catalog?\n\n` +
-				"Each session start adds models published since, refreshes context/max-out/image/reasoning/prices, " +
-				"and removes models the catalog dropped. Models you deselected above or delete later are never re-added.\n\n" +
-				"Toggle this any time under Edit provider → models.dev auto-update.",
-		);
-		if (autoUpdate) {
-			markManaged(providerId, provider.id, ids, [...catalog.keys()]);
-			ctx.ui.notify(`Auto-update enabled for "${providerId}" (${provider.name} catalog).`, "info");
-		}
+		markManaged(providerId, provider.id, ids, [...catalog.keys()]);
+		ctx.ui.notify(`"${providerId}" will track the ${provider.name} catalog on every start.`, "info");
 	}
 	ctx.ui.notify("Open /model to use your new provider.", "info");
 }

@@ -67,7 +67,8 @@ or **Delete provider**.
 ### Add
 
 1. **From models.dev catalog** — pick a provider, name it, enter the API key
-   (or none), multi-select models. Metadata comes from the catalog.
+   (or none), multi-select models. Metadata comes from the catalog, and the
+   provider keeps tracking it (see below).
 2. **Custom endpoint** — pick the provider style, enter the endpoint URL, name
    it, enter the API key, then:
    - **Auto-detect from the endpoint** — probe `/models` + metadata sources,
@@ -82,31 +83,33 @@ the filter currently shows, `n` clears the whole selection, `enter` confirms
 ### Edit
 
 Pick a provider, then: **Re-probe for models** (reconcile as above),
-**models.dev auto-update**, **Edit per model**, **Delete models**,
-**Add models manually**, **API flavor**, **Endpoint**, **Rename provider**, or
-**Delete provider**.
+**Edit per model**, **Delete models**, **Add models manually**, **API flavor**,
+**Endpoint**, **Rename provider**, or **Delete provider**.
 
 Per-model edits change one field in place — untouched fields (cost, headers,
 overrides) are preserved.
 
-### Auto-update from models.dev
+### Catalog providers track models.dev
 
-Providers added from the catalog can mirror that catalog instead of being a
-one-time copy. Enabled with a confirm at the end of the add flow, or later via
-**Edit provider → models.dev auto-update** (which also has **Sync now** and
-**Disable**). While enabled, every session start:
+Providers added from the models.dev catalog are not a one-time copy: they
+mirror that catalog, with no switch to flip. At every session start — in the
+background, so startup never waits on it — the extension:
 
-- adds models the catalog published since — new releases show up in `/model`
+- adds models the catalog published since, so new releases show up in `/model`
   without any action;
 - refreshes the catalog's authoritative fields (context window, max output,
   image input, reasoning, prices) on the models you already have;
 - removes models the catalog itself dropped.
 
 Nothing comes back that you got rid of: models you deselected while adding the
-provider, and models you delete afterwards, are recorded as suppressed. Hand-
-added models on that provider are never touched. The mirror state lives in
-`custom-provider-sync.json`; the models themselves stay in `models.json`.
-Sync failures (offline, catalog down) are silent and retried next session.
+provider, and models you delete afterwards, are recorded as suppressed.
+Hand-added models on that provider are never touched. Providers you added as a
+custom endpoint do not track anything. Sync failures (offline, catalog down)
+are silent and retried next session.
+
+The mirror state lives in `custom-provider-sync.json`; the models themselves
+stay in `models.json`. Removing a provider's entry there (or the file) makes it
+a plain static provider again.
 
 ## How metadata is resolved
 
