@@ -1,5 +1,4 @@
 import {
-	describeProbeInfo,
 	fetchGatewayWideInfo as probeGatewayWideInfo,
 	fetchModelsDevInfoForBaseUrl,
 	fetchModelsDevModels,
@@ -12,8 +11,9 @@ import {
 } from "model-probe";
 import { resolveApiKeyForProbe, serializeApiKey } from "../api-key.ts";
 import { loadModelsConfig, STORE_PATH, removeProviderApiKey, saveModelsConfig, saveProviderApiKey } from "../config.ts";
+import { describeInfo, describeStoredModel } from "../format.ts";
 import { unmarkManaged } from "../modelsdev-sync.ts";
-import { buildModelEntry, modelIdOf, modelOptionsFromProbe, readModelOptions } from "../model-entry.ts";
+import { buildModelEntry, modelIdOf, modelOptionsFromProbe } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { GatewayProbeProfile } from "../presets.ts";
 import type {
@@ -101,24 +101,12 @@ export function providerModelItems(provider: any): SelectItem[] {
 		.map((model: any) => {
 			const id = typeof model === "string" ? model.trim() : typeof model?.id === "string" ? model.id.trim() : "";
 			if (!id) return null;
-
-			const details: string[] = [];
-			if (model && typeof model === "object") {
-				if (model.reasoning === true) {
-					const opts = readModelOptions(model);
-					details.push(`reasoning:${opts.reasoning}`);
-				}
-				if (Array.isArray(model.input) && model.input.includes("image")) details.push("image");
-				if (typeof model.contextWindow === "number") details.push(`context ${model.contextWindow}`);
-				if (typeof model.maxTokens === "number") details.push(`max-out ${model.maxTokens}`);
-				if (model.cost && typeof model.cost === "object") details.push(`$${model.cost.input}/$${model.cost.output} per 1M`);
-			}
-
+			const summary = describeStoredModel(model);
 			return {
 				value: id,
 				label: id,
-				suffix: details.length > 0 ? ` • ${details.join(" • ")}` : "",
-				searchText: `${id} ${details.join(" ")}`,
+				suffix: summary ? ` • ${summary}` : "",
+				searchText: `${id} ${summary}`,
 			};
 		})
 		.filter((item: any): item is SelectItem => item !== null);
@@ -308,7 +296,7 @@ export function probePickerItems(
 	return ids.map((id) => ({
 		value: id,
 		label: id,
-		description: describeProbeInfo(resolveModelInfo(id, infoById.get(id), modelsDev, api)),
+		description: describeInfo(resolveModelInfo(id, infoById.get(id), modelsDev, api)),
 	}));
 }
 
@@ -325,7 +313,8 @@ export async function collectProbedModelInfo(
 	// fallback limits when nothing else knows them.
 	api?: ProviderApi,
 ): Promise<Map<string, ModelProbeInfo>> {
-	ctx.ui.notify("Fetching model metadata (context, max-out, image/video, reasoning) ...", "info");
+	// Callers that already fetched the gateway-wide sources announced it then.
+	if (!gatewayWide) ctx.ui.notify("Fetching model metadata (context, max-out, image/video, reasoning) ...", "info");
 	const profile = AUTO_PROBE_PROFILE;
 	const resolvedKey = resolveApiKeyForProbe(apiKey.mode, apiKey.value);
 

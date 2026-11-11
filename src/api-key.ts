@@ -29,6 +29,25 @@ export function serializeApiKey(mode: ApiKeyMode, value?: string, style?: Provid
 	return value;
 }
 
+// What the user typed at an "API key" prompt: a literal key, or a reference —
+// "$VAR" reads an environment variable, "!cmd" runs a shell command. Blank
+// means no key.
+export function parseApiKeyInput(input: string): { mode: ApiKeyMode; value?: string } {
+	const trimmed = input.trim();
+	if (!trimmed) return { mode: "none" };
+	if (trimmed.startsWith("!") && trimmed.length > 1) return { mode: "shell", value: trimmed.slice(1).trim() };
+	if (/^\$[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed)) return { mode: "env", value: trimmed.slice(1) };
+	return { mode: "literal", value: trimmed };
+}
+
+// A key for display: references in full, a literal key by its last characters only.
+export function describeApiKey(key: { mode: ApiKeyMode; value?: string }): string {
+	if (key.mode === "none" || !key.value) return "none";
+	if (key.mode === "env") return `$${key.value}`;
+	if (key.mode === "shell") return `!${key.value}`;
+	return key.value.length > 8 ? `…${key.value.slice(-4)}` : "set";
+}
+
 // Resolve a stored provider's key reference back into mode+value so we can
 // reuse it for probing. Reads the stored key first (custom-providers-auth.json), falling
 // back to a legacy inline apiKey in the models config. Anything other than

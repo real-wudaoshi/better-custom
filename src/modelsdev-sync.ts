@@ -153,7 +153,12 @@ export async function syncProvider(providerId: string): Promise<SyncResult | nul
 	const managed = managedProvider(providerId);
 	if (!managed) return null;
 
-	const catalog = await fetchModelsDevModels(managed.modelsDevProviderId);
+	// Only sync against the live catalog (or this machine's own recent copy of
+	// it). Offline, the catalog falls back to a published snapshot that can be
+	// months older than the store — syncing against that would delete models
+	// released since, and resurrect ones the user never chose. Throws instead,
+	// which callers treat as "try again next session".
+	const catalog = await fetchModelsDevModels(managed.modelsDevProviderId, { requireLive: true });
 	const config = loadModelsConfig();
 	const provider = config.providers?.[providerId];
 	if (!provider) {

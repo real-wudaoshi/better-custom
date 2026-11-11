@@ -1,11 +1,12 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { importLegacyProviders, normalizeStoreIds, readLegacyProviders } from "./src/config.ts";
+import { loadModelsConfig, normalizeStoreIds, readLegacyProviders, STORE_PATH } from "./src/config.ts";
 import { addProviderFlow } from "./src/flows/add.ts";
-import { deleteProviderFlow } from "./src/flows/delete.ts";
-import { editProviderFlow } from "./src/flows/edit.ts";
+import { editSingleProvider } from "./src/flows/edit.ts";
 import { migrateLegacyFlow } from "./src/flows/migrate.ts";
+import { describeProviderInline } from "./src/flows/shared.ts";
 import { describeSyncResult, syncAllManaged } from "./src/modelsdev-sync.ts";
 import { bindRegistrationApi, refreshRegistrations } from "./src/registration.ts";
+import type { SelectItem } from "./src/types.ts";
 import { selectOne } from "./src/ui/select.ts";
 
 export default function customProviderWizard(pi: ExtensionAPI) {
@@ -20,35 +21,48 @@ export default function customProviderWizard(pi: ExtensionAPI) {
 
 	pi.registerCommand("custom-provider", {
 		description: "Manage custom providers stored in ~/.pi/agent/custom-providers.json",
+		// One screen: "Add provider" on top, then every provider. Picking a
+		// provider opens its menu (models, key, endpoint, rename, delete), and
+		// backing out of that menu lands here again.
 		handler: async (_args, ctx) => {
-			const legacy = readLegacyProviders();
-			const actions: Array<{ value: string; label: string; description?: string }> = [
-				{ value: "add", label: "Add provider" },
-				{ value: "edit", label: "Edit provider" },
-				{ value: "delete", label: "Delete provider" },
-			];
-			if (legacy.length > 0) {
-				actions.push({
-					value: "migrate",
-					label: `Move ${legacy.length} provider${legacy.length === 1 ? "" : "s"} out of models.json`,
-					description: "Earlier versions wrote into pi's models.json — import those entries into this extension's own store",
-				});
+			let cursor = 0;
+			while (true) {
+				let providers: Record<string, any>;
+				try {
+					providers = loadModelsConfig().providers ?? {};
+				} catch (error) {
+					ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+					return;
+				}
+				const legacy = readLegacyProviders();
+				const items: SelectItem[] = [
+					{ value: "+add", label: "+ Add provider", description: "From the models.dev catalog, or any compatible endpoint" },
+					...Object.keys(providers)
+						.sort((a, b) => a.localeCompare(b))
+						.map((providerId) => {
+							const inline = describeProviderInline(providerId, providers[providerId]);
+							return { value: providerId, label: inline.label, suffix: inline.suffix, searchText: inline.searchText };
+						}),
+				];
+				if (legacy.length > 0) {
+					items.push({
+						value: "+migrate",
+						label: `Move ${legacy.length} provider${legacy.length === 1 ? "" : "s"} out of models.json`,
+						description: "Earlier versions wrote into pi's models.json — import those entries into this extension's own store",
+					});
+				}
+
+				const choice = await selectOne(ctx, "Custom providers", items, { initialIndex: Math.min(cursor, items.length - 1) });
+				if (!choice) return;
+				cursor = items.findIndex((item) => item.value === choice);
+				if (choice === "+add") {
+					// Adding is its own task: done (or cancelled) means done.
+					await addProviderFlow(ctx);
+					return;
+				}
+				if (choice === "+migrate") await migrateLegacyFlow(ctx);
+				else await editSingleProvider(ctx, choice);
 			}
-			const action = await selectOne(ctx, "Custom providers", actions);
-			if (!action) return;
-			if (action === "edit") {
-				await editProviderFlow(ctx);
-				return;
-			}
-			if (action === "delete") {
-				await deleteProviderFlow(ctx);
-				return;
-			}
-			if (action === "migrate") {
-				await migrateLegacyFlow(ctx);
-				return;
-			}
-			await addProviderFlow(ctx);
 		},
 	});
 

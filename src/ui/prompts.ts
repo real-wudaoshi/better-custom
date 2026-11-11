@@ -1,25 +1,19 @@
+import { parseApiKeyInput } from "../api-key.ts";
 import { CUSTOM_PREFIX, ensureCustomId, loadModelsConfig } from "../config.ts";
-import { describeProbeInfo, resolveModelInfo } from "model-probe";
+import { describeInfo, formatTokens } from "../format.ts";
+import { resolveModelInfo } from "model-probe";
 import { REASONING_LEVELS } from "../types.ts";
 import type { ApiKeyMode, CommandContext, ModelOptions, ProviderApi, ProviderStyle, ReasoningCeiling, SelectItem } from "../types.ts";
 import { normalizeEndpoint, slugify, suggestProviderId } from "../url.ts";
 import { selectOne } from "./select.ts";
 
+// One prompt: paste a key, name an env var / command, or leave it blank.
 export async function promptApiKey(
 	ctx: CommandContext,
 ): Promise<{ mode: ApiKeyMode; value?: string } | null> {
-	const choice = await selectOne(ctx, "API key", [
-		{ value: "literal", label: "API key", description: "Stored in custom-providers-auth.json, separate from pi's auth.json" },
-		{ value: "none", label: "None", description: "No key; a placeholder is written so the provider still loads" },
-	]);
-	if (!choice) return null;
-	if (choice === "none") return { mode: "none" };
-
-	const value = await ctx.ui.input("API key", "saved in custom-providers-auth.json under the provider id");
+	const value = await ctx.ui.input("API key (blank = none)", "paste the key, or $ENV_VAR / !command — kept in custom-providers-auth.json");
 	if (value === undefined) return null;
-	const trimmed = value.trim();
-	if (!trimmed) return { mode: "none" };
-	return { mode: "literal", value: trimmed };
+	return parseApiKeyInput(value);
 }
 
 function reasoningLabel(level: ReasoningCeiling): string {
@@ -146,16 +140,17 @@ export async function promptManualModels(
 			contextWindow: resolved.contextWindow ?? 262144,
 			maxTokens: resolved.maxTokens,
 		};
-		const summary = describeProbeInfo(resolved);
+		const summary = describeInfo(resolved);
 
 		// Per-model menu: each field opens its own prompt, then comes back here.
+		// "Done" comes first, so enter alone accepts the detected values.
 		while (true) {
 			const field = await selectOne(ctx, summary ? `${id} — ${summary}` : id, [
+				{ value: "done", label: "Done", description: "Keep these values and continue" },
 				{ value: "reasoning", label: "Reasoning", suffix: ` • ${opts.reasoning}`, description: "Set the reasoning ceiling (off → max)" },
 				{ value: "image", label: "Image input", suffix: ` • ${opts.image ? "on" : "off"}`, description: "Toggle image input (text+image vs text-only)" },
-				{ value: "context", label: "Context window", suffix: ` • ${opts.contextWindow ?? "unset"}`, description: "Max context tokens for this model" },
-				{ value: "maxtokens", label: "Max output tokens", suffix: ` • ${opts.maxTokens ?? "unset"}`, description: "Max tokens this model may generate" },
-				{ value: "done", label: "Done", description: "Confirm this model and continue" },
+				{ value: "context", label: "Context window", suffix: ` • ${opts.contextWindow ? formatTokens(opts.contextWindow) : "unset"}`, description: "Max context tokens for this model" },
+				{ value: "maxtokens", label: "Max output tokens", suffix: ` • ${opts.maxTokens ? formatTokens(opts.maxTokens) : "unset"}`, description: "Max tokens this model may generate" },
 			]);
 			if (field === null || field === "done") break;
 			if (field === "reasoning") {

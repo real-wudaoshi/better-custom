@@ -1,6 +1,7 @@
-import { describeProbeInfo, fetchModelsDevInfoForBaseUrl, probeModels } from "model-probe";
-import { apiKeyFromProvider, resolveApiKeyForProbe } from "../api-key.ts";
-import { ensureCustomId, loadModelsConfig, STORE_PATH, renameProviderApiKey, saveModelsConfig } from "../config.ts";
+import { chatModelCandidates, fetchModelsDevInfoForBaseUrl, probeDeveloperRole, probeModels } from "model-probe";
+import { apiKeyFromProvider, describeApiKey, parseApiKeyInput, resolveApiKeyForProbe, serializeApiKey } from "../api-key.ts";
+import { ensureCustomId, loadModelsConfig, STORE_PATH, renameProviderApiKey, saveModelsConfig, saveProviderApiKey } from "../config.ts";
+import { describeInfo, describeStoredModel, formatCost, formatTokens } from "../format.ts";
 import { applyReasoning, findModel, modelIdOf, readCeilingString, readModelOptions } from "../model-entry.ts";
 import { renameManaged, suppressModels } from "../modelsdev-sync.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
@@ -21,7 +22,6 @@ import {
 	addModelEntriesToProvider,
 	collectProbedModelInfo,
 	describeProvider,
-	describeProviderInline,
 	fetchGatewayWideInfo,
 	fetchModelsDevOptionsForModel,
 	mutateModel,
@@ -31,48 +31,8 @@ import {
 	removeProvider,
 } from "./shared.ts";
 
-export async function editProviderFlow(ctx: CommandContext) {
-	let cursor = 0;
-
-	while (true) {
-		let config: ModelsConfig;
-		try {
-			config = loadModelsConfig();
-		} catch (error) {
-			ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
-			return;
-		}
-
-		config.providers ||= {};
-		const providerIds = Object.keys(config.providers).sort((a, b) => a.localeCompare(b));
-		if (providerIds.length === 0) {
-			ctx.ui.notify(`No providers found in ${STORE_PATH}`, "warning");
-			return;
-		}
-
-		const choice = await selectOne(
-			ctx,
-			"Edit provider",
-			providerIds.map((providerId) => {
-				const inline = describeProviderInline(providerId, config.providers?.[providerId]);
-				return {
-					value: providerId,
-					label: inline.label,
-					suffix: inline.suffix,
-					searchText: inline.searchText,
-				};
-			}),
-			{ initialIndex: Math.min(cursor, providerIds.length - 1) },
-		);
-		if (!choice) return;
-
-		cursor = providerIds.indexOf(choice);
-		await editSingleProvider(ctx, choice);
-	}
-}
-
 // Per-provider action menu. Returns when the user backs out to the provider list.
-async function editSingleProvider(ctx: CommandContext, providerId: string) {
+export async function editSingleProvider(ctx: CommandContext, providerId: string) {
 	while (true) {
 		let config: ModelsConfig;
 		try {
@@ -88,15 +48,28 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 		}
 
 		const modelCount = Array.isArray(provider.models) ? provider.models.length : 0;
+		// The developer-role switch only exists for OpenAI-style providers.
+		const hasDeveloperRole = providerStyleOf(provider) === "openai";
 		const action = await selectOne(ctx, `Edit ${providerId}`, [
-			{ value: "probe", label: "Re-probe for models", description: "Query /models again: add new models, flag vanished ones as unsupported, offer metadata updates" },
-			{ value: "models", label: "Edit per model", description: `${modelCount} model${modelCount === 1 ? "" : "s"} — reasoning, image input, context, max tokens, headers, delete` },
-			{ value: "deletemodels", label: "Delete models", description: "Remove multiple models at once" },
+			{ value: "probe", label: "Re-probe for models", description: "Query /models again: add new models, update metadata, spot vanished ones" },
+			{ value: "models", label: "Edit a model", suffix: ` • ${modelCount} model${modelCount === 1 ? "" : "s"}`, description: "Reasoning, image input, context, max output, headers, refresh metadata, delete" },
 			{ value: "add", label: "Add models manually", description: "Type model ids to add" },
-			{ value: "api", label: "API flavor", suffix: ` • ${typeof provider.api === "string" ? provider.api : "unset"}`, description: "Switch between Chat Completions, Responses, Anthropic Messages, and Gemini" },
+			{ value: "deletemodels", label: "Delete models", description: "Remove several models at once" },
+			{ value: "apikey", label: "API key", suffix: ` • ${describeApiKey(apiKeyFromProvider(providerId, provider))}`, description: "Replace or remove the stored key" },
 			{ value: "endpoint", label: "Endpoint", suffix: ` • ${typeof provider.baseUrl === "string" ? provider.baseUrl : "unset"}`, description: "Change the provider's baseUrl" },
-			{ value: "rename", label: "Rename provider", description: "Change the provider name in the models config" },
-			{ value: "delete", label: "Delete provider", description: "Remove this provider from the models config" },
+			{ value: "api", label: "API flavor", suffix: ` • ${typeof provider.api === "string" ? provider.api : "unset"}`, description: "Switch between Chat Completions, Responses, Anthropic Messages, and Gemini" },
+			...(hasDeveloperRole
+				? [
+						{
+							value: "devrole",
+							label: "Developer role",
+							suffix: ` • ${provider.compat?.supportsDeveloperRole === true ? "on" : "off"}`,
+							description: 'Whether system prompts go out with the "developer" role (some gateways reject it)',
+						},
+					]
+				: []),
+			{ value: "rename", label: "Rename provider", description: "Change the provider's name" },
+			{ value: "delete", label: "Delete provider", description: "Remove this provider and its stored key" },
 			{ value: "back", label: "Back", description: "Return to the provider list" },
 		]);
 		if (!action || action === "back") return;
@@ -109,6 +82,10 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 			await deleteModelsFromProvider(ctx, providerId);
 		} else if (action === "add") {
 			await addModelsToProvider(ctx, providerId);
+		} else if (action === "apikey") {
+			await changeProviderApiKey(ctx, providerId);
+		} else if (action === "devrole") {
+			await changeDeveloperRole(ctx, providerId);
 		} else if (action === "api") {
 			await changeProviderApi(ctx, providerId);
 		} else if (action === "endpoint") {
@@ -122,6 +99,79 @@ async function editSingleProvider(ctx: CommandContext, providerId: string) {
 			if (renamed) providerId = renamed;
 		}
 	}
+}
+
+// Replace or remove a provider's stored key. Never shows the current key.
+async function changeProviderApiKey(ctx: CommandContext, providerId: string) {
+	let provider: any;
+	try {
+		provider = loadModelsConfig().providers?.[providerId];
+	} catch (error) {
+		ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		return;
+	}
+	const current = apiKeyFromProvider(providerId, provider);
+	const input = await ctx.ui.input(
+		'API key (blank = keep, "-" = remove)',
+		current.mode === "none" ? "paste the key, or $ENV_VAR / !command" : `current: ${describeApiKey(current)}`,
+	);
+	if (input === undefined || !input.trim()) return;
+	const next = input.trim() === "-" ? { mode: "none" as const } : parseApiKeyInput(input);
+	// "none" stores the placeholder key, so the provider still loads.
+	const serialized = serializeApiKey(next.mode, next.value, providerStyleOf(provider));
+	if (!serialized) return;
+	try {
+		saveProviderApiKey(providerId, serialized);
+	} catch (error) {
+		ctx.ui.notify(`Could not write the API key: ${error instanceof Error ? error.message : String(error)}`, "error");
+		return;
+	}
+	ctx.ui.notify(next.mode === "none" ? `Removed the API key of "${providerId}".` : `Updated the API key of "${providerId}".`, "info");
+}
+
+// Turn the "developer" role on or off, or ask the endpoint which it takes.
+async function changeDeveloperRole(ctx: CommandContext, providerId: string) {
+	let provider: any;
+	try {
+		provider = loadModelsConfig().providers?.[providerId];
+	} catch (error) {
+		ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
+		return;
+	}
+	const current = provider?.compat?.supportsDeveloperRole === true;
+	const choice = await selectOne(ctx, `Developer role for ${providerId}`, [
+		{ value: "detect", label: "Detect", description: "Ask the endpoint with one tiny chat completion" },
+		{ value: "on", label: "On", suffix: current ? " • current" : undefined, description: 'Send system prompts with the "developer" role' },
+		{ value: "off", label: "Off", suffix: current ? undefined : " • current", description: 'Send them with the "system" role — accepted everywhere' },
+	]);
+	if (!choice) return;
+
+	let value = choice === "on";
+	if (choice === "detect") {
+		const baseUrl = typeof provider?.baseUrl === "string" ? provider.baseUrl : "";
+		const ids = (Array.isArray(provider?.models) ? provider.models : []).map(modelIdOf).filter(Boolean);
+		if (!baseUrl || ids.length === 0) {
+			ctx.ui.notify("Detection needs an endpoint and at least one model.", "warning");
+			return;
+		}
+		const apiKey = apiKeyFromProvider(providerId, provider);
+		ctx.ui.notify("Probing developer-role support ...", "info");
+		const probed = await probeDeveloperRole(baseUrl, resolveApiKeyForProbe(apiKey.mode, apiKey.value), chatModelCandidates(ids));
+		if (probed === undefined) {
+			ctx.ui.notify("The probe was inconclusive — nothing changed.", "warning");
+			return;
+		}
+		value = probed;
+	}
+	if (value === current) {
+		ctx.ui.notify(`Developer role for "${providerId}" is already ${value ? "on" : "off"}.`, "info");
+		return;
+	}
+	const saved = await mutateProvider(ctx, providerId, (p) => {
+		p.compat = { ...(p.compat && typeof p.compat === "object" ? p.compat : {}), supportsDeveloperRole: value };
+		return true;
+	});
+	if (saved) ctx.ui.notify(`Developer role for "${providerId}" is now ${value ? "on" : "off"}.`, "info");
 }
 
 const API_OPTIONS: Array<{ value: ProviderApi; label: string; description: string }> = [
@@ -332,8 +382,8 @@ async function editSingleModel(ctx: CommandContext, providerId: string, modelId:
 		}
 
 		const opts = readModelOptions(model);
-		const ctxWin = typeof model.contextWindow === "number" ? model.contextWindow : "unset";
-		const maxTok = typeof model.maxTokens === "number" ? model.maxTokens : "unset";
+		const ctxWin = typeof model.contextWindow === "number" ? formatTokens(model.contextWindow) : "unset";
+		const maxTok = typeof model.maxTokens === "number" ? formatTokens(model.maxTokens) : "unset";
 		const hasHeaders = model.headers && Object.keys(model.headers).length > 0;
 		const override = model.baseUrl || model.api ? "set" : "unset";
 
@@ -445,39 +495,46 @@ type DiffableField = (typeof DIFFABLE_FIELDS)[number];
 type MetaChange = { field: DiffableField; label: string };
 
 // Compare a stored model entry against freshly resolved probe info. Returns
-// the authoritative differences, rendered as `context 128000→1000000` /
-// `max-out 8192→32000` / `cost $1.32/$3.96→$0.44/$0.87` (input/output per 1M)
-// for numeric fields and `image [+]` / `reasoning [-]` for boolean fields.
+// the authoritative differences, rendered as `ctx 128K→1M` / `out 8.2K→32K` /
+// `image off→on` / `reasoning on→off` / `cost $1.32/$3.96→$0.44/$0.87`
+// (input/output per 1M).
 function diffStoredModel(model: any, info: ModelProbeInfo): MetaChange[] {
 	const guessed = new Set<string>([...(info.inferredFields ?? []), ...(info.defaultedFields ?? [])]);
 	const changes: MetaChange[] = [];
+	// Compact units, unless rounding would make both sides read the same
+	// (65535 → 65536): then the exact numbers are shown.
+	const range = (old: number | undefined, next: number) => {
+		const before = old === undefined ? "unset" : formatTokens(old);
+		const after = formatTokens(next);
+		return before === after ? `${old}→${next}` : `${before}→${after}`;
+	};
+	const onOff = (value: boolean) => (value ? "on" : "off");
 	for (const field of DIFFABLE_FIELDS) {
 		const value = info[field];
 		if (value === undefined || guessed.has(field)) continue;
 		if (field === "contextWindow") {
 			const old = typeof model?.contextWindow === "number" ? model.contextWindow : undefined;
-			if (old !== value) changes.push({ field, label: `context ${old ?? "unset"}→${value}` });
+			if (old !== value && info.contextWindow !== undefined) changes.push({ field, label: `ctx ${range(old, info.contextWindow)}` });
 		} else if (field === "maxTokens") {
 			const old = typeof model?.maxTokens === "number" ? model.maxTokens : undefined;
-			if (old !== value) changes.push({ field, label: `max-out ${old ?? "unset"}→${value}` });
+			if (old !== value && info.maxTokens !== undefined) changes.push({ field, label: `out ${range(old, info.maxTokens)}` });
 		} else if (field === "image") {
 			const old = Array.isArray(model?.input) ? model.input.includes("image") : true;
-			if (old !== value) changes.push({ field, label: `image [${value ? "+" : "-"}]` });
+			if (old !== value) changes.push({ field, label: `image ${onOff(old)}→${onOff(info.image === true)}` });
 		} else if (field === "cost") {
+			const cost = info.cost;
+			if (!cost) continue;
 			const old = model?.cost && typeof model.cost === "object" ? model.cost : undefined;
 			const same =
 				old !== undefined &&
-				old.input === value.input &&
-				old.output === value.output &&
-				(old.cacheRead ?? 0) === value.cacheRead &&
-				(old.cacheWrite ?? 0) === value.cacheWrite;
-			if (!same) {
-				const oldLabel = old ? `$${old.input}/$${old.output}` : "unset";
-				changes.push({ field, label: `cost ${oldLabel}→$${value.input}/$${value.output}` });
-			}
+				old.input === cost.input &&
+				old.output === cost.output &&
+				(old.cacheRead ?? 0) === cost.cacheRead &&
+				(old.cacheWrite ?? 0) === cost.cacheWrite;
+			if (!same) changes.push({ field, label: `cost ${old ? formatCost(old) : "unset"}→${formatCost(cost)}` });
 		} else {
 			const old = model?.reasoning === true;
-			if (old !== value) changes.push({ field, label: `reasoning [${value ? "+" : "-"}]` });
+			if (old !== value) changes.push({ field, label: `reasoning ${onOff(old)}→${onOff(info.reasoning === true)}` });
 		}
 	}
 	return changes;
@@ -495,16 +552,7 @@ function applyMetaChanges(entry: any, info: ModelProbeInfo, changes: MetaChange[
 }
 
 // One-line summary of a stored entry's current config, for the re-probe list.
-// Empty string when the entry carries no metadata at all.
-function storedModelSummary(model: any): string {
-	const details: string[] = [];
-	if (model?.reasoning === true) details.push(`reasoning:${readModelOptions(model).reasoning}`);
-	if (Array.isArray(model?.input) && model.input.includes("image")) details.push("image");
-	if (typeof model?.contextWindow === "number") details.push(`context ${model.contextWindow}`);
-	if (typeof model?.maxTokens === "number") details.push(`max-out ${model.maxTokens}`);
-	if (model?.cost && typeof model.cost === "object") details.push(`$${model.cost.input}/$${model.cost.output} per 1M`);
-	return details.join(" • ");
-}
+const storedModelSummary = describeStoredModel;
 
 async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	let provider: any;
@@ -613,7 +661,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 		items.push({
 			value: id,
 			label: id,
-			description: describeProbeInfo(infoById.get(id) ?? {}),
+			description: describeInfo(infoById.get(id)),
 			searchText: `${id} new`,
 			states: ["off", "on"],
 			initial: "off",

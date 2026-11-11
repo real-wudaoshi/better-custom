@@ -1,4 +1,5 @@
 import {
+	chatModelCandidates,
 	fetchModelsDevInfoForBaseUrl,
 	fetchModelsDevModels,
 	fetchModelsDevProviders,
@@ -10,6 +11,7 @@ import {
 } from "model-probe";
 import { resolveApiKeyForProbe } from "../api-key.ts";
 import { loadModelsConfig, STORE_PATH } from "../config.ts";
+import { summarizeOrigins } from "../format.ts";
 import { buildProviderConfig } from "../model-entry.ts";
 import { AUTO_PROBE_PROFILE } from "../presets.ts";
 import type { ApiKeyMode, CommandContext, ModelOptions, ModelProbeInfo, ModelsConfig, ProviderApi, ProviderStyle } from "../types.ts";
@@ -154,8 +156,9 @@ async function addFromCatalog(ctx: CommandContext) {
 	ctx.ui.notify("Open /model to use your new provider.", "info");
 }
 
-// Model collection for a custom endpoint: auto-detect probes the gateway,
-// manual entry skips all network calls.
+// Model collection for a custom endpoint. The endpoint is probed straight
+// away — no "auto or manual?" question first; typing ids by hand is offered
+// when the probe fails or finds nothing.
 async function collectModelIds(
 	ctx: CommandContext,
 	style: ProviderStyle,
@@ -164,12 +167,6 @@ async function collectModelIds(
 	normalizedEndpoint: string,
 	trimmedEndpointInput: string,
 ): Promise<{ ids: string[]; infoById?: Map<string, ModelProbeInfo>; baseUrl?: string; options?: Map<string, ModelOptions> } | null> {
-	const modelMode = await selectOne(ctx, "Models", ["Auto-detect from the endpoint", "Add manually"]);
-	if (!modelMode) return null;
-	if (modelMode !== "Auto-detect from the endpoint") {
-		return promptManualModels(ctx, style);
-	}
-
 	let baseUrl = normalizedEndpoint;
 	while (true) {
 		try {
@@ -255,7 +252,8 @@ async function addCustom(ctx: CommandContext) {
 	let developerRole: boolean | undefined;
 	if (style === "openai" || style === "openai-responses") {
 		const probeBase = collected.baseUrl ?? endpoint.normalized;
-		developerRole = await probeDeveloperRole(probeBase, resolveApiKeyForProbe(apiKey.mode, apiKey.value), collected.ids[0]);
+		// Likely chat models first: asking an embedding model proves nothing.
+		developerRole = await probeDeveloperRole(probeBase, resolveApiKeyForProbe(apiKey.mode, apiKey.value), chatModelCandidates(collected.ids));
 		if (developerRole === false) {
 			ctx.ui.notify("This endpoint rejects the developer role — it will be disabled in the provider config.", "info");
 		} else if (developerRole === undefined) {
@@ -284,21 +282,11 @@ async function addCustom(ctx: CommandContext) {
 	if (!(await persistProvider(ctx, providerId, providerConfig))) return;
 	persistApiKey(ctx, providerId, apiKey, style);
 
-	const infoById = collected.infoById;
-	const probedCount = infoById
-		? collected.ids.filter((id) => {
-				const info = infoById.get(id);
-				return info && !info.inferred && probeInfoSummary(info).length > 0;
-			}).length
-		: 0;
-	const inferredCount = infoById ? collected.ids.filter((id) => infoById.get(id)?.inferred).length : 0;
-	const defaultedCount = collected.ids.length - probedCount - inferredCount;
-	const summary: string[] = [];
-	if (probedCount > 0) summary.push(`detected ${probedCount}`);
-	if (inferredCount > 0) summary.push(`inferred from known models ${inferredCount}`);
-	if (defaultedCount > 0) summary.push(`defaults ${defaultedCount}`);
+	// Where each model's metadata came from, e.g. "gateway 3 • models.dev 2".
+	const origins = collected.infoById ? summarizeOrigins(collected.ids, collected.infoById) : "";
+	const count = collected.ids.length;
 	ctx.ui.notify(
-		`Saved provider "${providerId}" to ${STORE_PATH}` + (summary.length > 0 ? ` — context/image/reasoning: ${summary.join(", ")}` : ""),
+		`Saved provider "${providerId}" with ${count} model${count === 1 ? "" : "s"} to ${STORE_PATH}` + (origins ? ` — metadata: ${origins}` : ""),
 		"info",
 	);
 	ctx.ui.notify("Open /model to use your new provider.", "info");

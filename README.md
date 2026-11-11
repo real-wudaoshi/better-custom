@@ -25,11 +25,12 @@ Use `pi install` rather than copying the folder into
 
 ## Quick start
 
-Run `/custom-provider` in pi and pick one of three actions.
+Run `/custom-provider` in pi. One screen lists **+ Add provider** and every
+provider you have; pick a provider to open its menu.
 
 ### Add a known provider (recommended)
 
-**Add provider → From models.dev catalog** — pick a site (OpenRouter, DeepSeek,
+**+ Add provider → From models.dev catalog** — pick a site (OpenRouter, DeepSeek,
 Groq, xAI, Z.ai, ...), give it a name, paste an API key, select the models you
 want. Endpoint, model ids, metadata and prices all come from the
 [models.dev](https://models.dev) catalog; nothing is probed. The provider keeps
@@ -37,26 +38,34 @@ tracking that catalog afterwards, so new models appear on their own.
 
 ### Add your own endpoint
 
-**Add provider → Custom endpoint** — choose the API flavor (Chat Completions,
-Responses, Anthropic Messages, Gemini, Ollama), enter the URL, name it, paste a
-key, then either:
+**+ Add provider → Custom endpoint** — choose the API flavor (Chat Completions,
+Responses, Anthropic Messages, Gemini, Ollama), enter the URL, name it, enter a
+key. The endpoint is probed right away (`/models` plus the gateway's own
+metadata endpoints) and every model is listed with its metadata; if the probe
+fails or finds nothing you can retry or type model ids by hand.
 
-- **Auto-detect from the endpoint** — probes `/models` plus the gateway's own
-  metadata endpoints and shows every model with its metadata; or
-- **Add manually** — type ids one at a time, each with an optional metadata menu.
+The API key prompt takes a pasted key, `$ENV_VAR` (read from the environment),
+`!command` (the command's output), or nothing at all.
 
-Model pickers: type to filter, `space` toggles a row, `a` takes everything the
-filter shows, `n` clears the selection, `enter` confirms, `esc` cancels.
+Lists and pickers all work the same way: type to filter (every letter goes to
+the search), `↑↓` / `PgUp` / `PgDn` / `Home` / `End` move, `enter` confirms,
+`esc` clears the search and then goes back. In a model picker `space` toggles a
+row, `tab` takes everything the filter shows (again to undo), and `enter` with
+nothing ticked takes the highlighted row.
+
+Model metadata is shown compactly — `128K ctx • 16.4K out • image · models.dev`
+— with the source named once at the end (nothing when the gateway reported it
+all).
 
 ### Edit / delete
 
-**Edit provider** gives you re-probe, per-model edits (reasoning ceiling, image
-input, context window, max output, headers/endpoint override), bulk model
-delete, API flavor, endpoint, rename, and delete. **Delete provider** removes a
-provider outright.
+Picking a provider gives you: re-probe, per-model edits (reasoning ceiling,
+image input, context window, max output, headers/endpoint override, refresh
+metadata), add or bulk-delete models, API key, endpoint, API flavor, the
+developer-role switch (on / off / detect), rename, and delete.
 
 **Re-probe for models** re-reads `/models` and puts everything in one list:
-new models, metadata changes (`context 128000→1000000`, `image [+]`), and
+new models, metadata changes (`ctx 128K→1M`, `image off→on`), and
 models that vanished (`unsupported`). `[x]` apply, `[-]` keep stored values,
 `[ ]` remove/skip.
 

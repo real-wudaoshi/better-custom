@@ -23,36 +23,43 @@ pi install /path/to/better-custom                              # 本地目录
 
 ## 快速上手
 
-在 pi 里运行 `/custom-provider`,然后三选一。
+在 pi 里运行 `/custom-provider`。一个界面列出 **+ Add provider** 和你已有的
+所有 provider;选中某个 provider 就进入它的菜单。
 
 ### 添加已知 provider(推荐)
 
-**Add provider → From models.dev catalog** —— 挑一个站点(OpenRouter、
+**+ Add provider → From models.dev catalog** —— 挑一个站点(OpenRouter、
 DeepSeek、Groq、xAI、Z.ai……),起个名字,粘贴 API key,勾选想要的模型。
 端点、模型 id、元数据和价格全部来自 [models.dev](https://models.dev) 目录,
 完全不探测。加完之后该 provider 会持续跟踪目录,新模型自动出现。
 
 ### 添加自己的端点
 
-**Add provider → Custom endpoint** —— 选择 API 类型(Chat Completions、
-Responses、Anthropic Messages、Gemini、Ollama),输入 URL、命名、粘贴 key,
-然后二选一:
+**+ Add provider → Custom endpoint** —— 选择 API 类型(Chat Completions、
+Responses、Anthropic Messages、Gemini、Ollama),输入 URL、命名、输入 key。
+随后直接探测端点(`/models` 加网关自带的元数据接口),列出所有模型及其
+元数据;探测失败或没有模型时,可以重试或手动输入模型 id。
 
-- **Auto-detect from the endpoint** —— 探测 `/models` 和网关自带的元数据
-  接口,列出所有模型并显示元数据;或
-- **Add manually** —— 逐个输入 id,每个可进元数据菜单细调。
+API key 输入框可以粘贴 key,也可以写 `$ENV_VAR`(读环境变量)、`!command`
+(取命令输出),或者留空。
 
-模型选择器:直接输入即过滤,`space` 切换单行,`a` 选中当前过滤出的全部,
-`n` 清空选择,`enter` 确认,`esc` 取消。
+所有列表和选择器操作一致:直接输入即过滤(任何字母都进搜索框),
+`↑↓` / `PgUp` / `PgDn` / `Home` / `End` 移动,`enter` 确认,`esc` 先清空搜索、
+再返回。模型选择器里 `space` 切换单行,`tab` 选中当前过滤出的全部(再按一次
+撤销),一个都没勾时 `enter` 直接取光标所在的那一行。
+
+模型元数据以紧凑形式显示 —— `128K ctx • 16.4K out • image · models.dev` ——
+来源只在末尾标一次(全部来自网关时不标)。
 
 ### 编辑 / 删除
 
-**Edit provider** 里可以:重新探测、逐模型编辑(reasoning 档位、图像输入、
-上下文窗口、最大输出、headers/端点覆盖)、批量删除模型、改 API 类型、改端点、
-重命名、删除。**Delete provider** 直接删掉整个 provider。
+选中一个 provider 后可以:重新探测、逐模型编辑(reasoning 档位、图像输入、
+上下文窗口、最大输出、headers/端点覆盖、刷新元数据)、手动添加或批量删除
+模型、改 API key、改端点、改 API 类型、developer role 开关(开 / 关 / 自动
+检测)、重命名、删除。
 
 **Re-probe for models** 会重新读一次 `/models` 并把所有情况放进一个列表:
-新模型、元数据变化(`context 128000→1000000`、`image [+]`)、以及消失的模型
+新模型、元数据变化(`ctx 128K→1M`、`image off→on`)、以及消失的模型
 (标 `unsupported`)。`[x]` 应用,`[-]` 保留原值,`[ ]` 删除/跳过。
 
 ## 会自动填好什么
