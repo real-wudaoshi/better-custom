@@ -565,7 +565,7 @@ async function reprobeProvider(ctx: CommandContext, providerId: string) {
 	}
 
 	// models.dev catalog tier — above the local rules, below detected values.
-	const modelsDev = style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl) : undefined;
+	const modelsDev = style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl, probed.ids) : undefined;
 
 	// Resolve metadata for everything we may touch: new models (to describe and
 	// add them) and already-configured ones (to diff against the stored entry).
@@ -801,7 +801,7 @@ async function refreshModelMetadata(ctx: CommandContext, providerId: string, mod
 		return;
 	}
 	const gatewayWide = await fetchGatewayWideInfo(style, apiKey, probed.baseUrl, AUTO_PROBE_PROFILE);
-	const modelsDev = await fetchModelsDevInfoForBaseUrl(probed.baseUrl);
+	const modelsDev = await fetchModelsDevInfoForBaseUrl(probed.baseUrl, [modelId]);
 	const infoById = await collectProbedModelInfo(
 		ctx,
 		style,

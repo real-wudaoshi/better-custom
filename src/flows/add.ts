@@ -198,7 +198,7 @@ async function collectModelIds(
 			}
 
 			// models.dev catalog tier — above the local rules, below detected values.
-			const modelsDev = style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl) : undefined;
+			const modelsDev = style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl, probed.ids) : undefined;
 
 			const picked = await pickMany(ctx, "Select models", probePickerItems(probed.ids, probed.infoById, modelsDev, api));
 			if (!picked || picked.length === 0) return null;

@@ -331,11 +331,14 @@ export async function collectProbedModelInfo(
 
 	const gw = gatewayWide ?? (await fetchGatewayWideInfo(style, apiKey, baseUrl, profile));
 
-	// models.dev catalog tier (exact per-model entries — above local rules,
-	// below detected values), matched by base URL. One cached call; empty when
-	// the endpoint isn't a known provider.
+	// models.dev catalog tier (above local rules, below detected values). Matched
+	// by base URL first, then by model id across the whole catalog, so a relay
+	// endpoint still gets real metadata for well-known ids. One cached call.
 	const dev =
-		modelsDev ?? (profile.modelsDev && style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(baseUrl) : undefined);
+		modelsDev ??
+		(profile.modelsDev && style !== "ollama" && style !== "gemini"
+			? await fetchModelsDevInfoForBaseUrl(baseUrl, ids)
+			: undefined);
 
 	// Per-model details for the picked ids. Skipped when a gateway-wide source
 	// already answered for everything (LiteLLM's /models/{id} has no metadata).
