@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { ModelCostInfo } from "model-probe";
+import type { MetadataProvenance, ModelCostInfo } from "model-probe";
 
 export type ProviderApi = "openai-completions" | "openai-responses" | "anthropic-messages" | "google-generative-ai";
 export type ProviderStyle = "openai" | "openai-responses" | "anthropic" | "ollama" | "gemini";
@@ -12,15 +12,15 @@ export const PI_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "x
 
 // Per-model knobs the wizard can write. apiKey lives at provider scope, not here.
 export type ModelOptions = {
+	metadataProvenance?: import("model-probe").MetadataProvenance;
 	reasoning: ReasoningCeiling;
 	image: boolean;
 	contextWindow?: number;
 	maxTokens?: number;
-	// USD per 1M tokens, from the gateway or the models.dev catalog. Only real
-	// sources — never guessed.
+	// USD per 1M tokens from the gateway, a catalog offering or the user.
 	cost?: ModelCostInfo;
 	// When set, written verbatim instead of deriving a map from the ceiling. Used
-	// when a probe learned the provider's exact thinking levels (effort options).
+	// when model-probe supplied named effort options.
 	thinkingLevelMap?: Record<string, string | null>;
 };
 
@@ -33,10 +33,25 @@ export type ModelsConfig = {
 	providers?: Record<string, any>;
 };
 
-export type ProbeItem = {
-	value: string;
+// Structured inspector data, shared by saved models, discovery and change review.
+// Sources belong to individual fields, never to a whole mixed-source model.
+export type FieldEditor =
+	| { kind: "text"; value: string; placeholder?: string }
+	| { kind: "choice"; value: string; choices: Array<{ value: string; label: string }> };
+
+export type DetailField = {
 	label: string;
-	description?: string;
+	value: string;
+	source?: string;
+	hint?: string;
+	action?: string;
+	editor?: FieldEditor;
+};
+
+export type DetailSection = {
+	title: string;
+	fields?: DetailField[];
+	lines?: string[];
 };
 
 export type SelectItem = {
@@ -45,6 +60,10 @@ export type SelectItem = {
 	suffix?: string;
 	description?: string;
 	searchText?: string;
+	tag?: string;
+	details?: DetailSection[];
 };
+
+export type ProbeItem = SelectItem;
 
 export type CommandContext = Parameters<Parameters<ExtensionAPI["registerCommand"]>[1]["handler"]>[1];

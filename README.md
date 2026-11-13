@@ -25,49 +25,109 @@ Use `pi install` rather than copying the folder into
 
 ## Quick start
 
-Run `/custom-provider` in pi. One screen lists **+ Add provider** and every
-provider you have; pick a provider to open its menu.
+Run `/custom-provider` in pi. The provider browser opens a model **workspace**,
+not an action menu. Wide terminals show a searchable list on the left and a
+structured inspector on the right; narrow terminals switch between those panes.
+All pages open as a full-width bottom drawer in Pi's input area, not centered
+or floating windows. Lists, settings, text inputs and confirmations share the
+same height at a given terminal size: at least 20 lines when space permits,
+shrinking on small terminals. Switching pages keeps the lower edge fixed.
 
-### Add a known provider (recommended)
+### Add a provider
 
-**+ Add provider → From models.dev catalog** — pick a site (OpenRouter, DeepSeek,
-Groq, xAI, Z.ai, ...), give it a name, paste an API key, select the models you
-want. Endpoint, model ids, metadata and prices all come from the
-[models.dev](https://models.dev) catalog; nothing is probed. The provider keeps
-tracking that catalog afterwards, so new models appear on their own.
+Choose **+ Add provider** (or `Ctrl+N`), then:
 
-### Add your own endpoint
+- **From models.dev catalog** — pick a provider, then use the two-step wizard.
+  Its model list comes from the catalog and keeps syncing at session start.
+- **Custom endpoint** — step **1/2 Connection** edits endpoint, protocol, name and
+  key inline. **Next: add models** opens step **2/2 Models**, with **Discover**,
+  **Add by ID**, and **Back**. Space checks models, Right customizes metadata,
+  and Enter creates the provider. **Back** returns to connection settings while
+  preserving the key, checked models and custom metadata. Nothing is saved until
+  the model step is confirmed. Discovery failures stay on that page, so you can
+  retry, add IDs or go Back without restarting.
 
-**+ Add provider → Custom endpoint** — choose the API flavor (Chat Completions,
-Responses, Anthropic Messages, Gemini, Ollama), enter the URL, name it, enter a
-key. The endpoint is probed right away (`/models` plus the gateway's own
-metadata endpoints) and every model is listed with its metadata; if the probe
-fails or finds nothing you can retry or type model ids by hand.
+Keys may be pasted, referenced as `$ENV_VAR`, supplied by `!command`, or left
+empty for keyless endpoints. A saved provider opens directly into its workspace.
+Manual add is one form: model ID(s), context, output limit, images and reasoning
+are visible and editable together. Auto values are filled from rules/defaults;
+manual edits survive ID changes. Press **Add / Ctrl+S** once to create the model.
+Comma- or space-separated IDs still work: Auto stays per-model, while explicit
+metadata overrides apply to the whole batch. There is no second selection page.
 
-The API key prompt takes a pasted key, `$ENV_VAR` (read from the environment),
-`!command` (the command's output), or nothing at all.
+### Browse, edit, select
 
-Lists and pickers all work the same way: type to filter (every letter goes to
-the search), `↑↓` / `PgUp` / `PgDn` / `Home` / `End` move, `enter` confirms,
-`esc` clears the search and then goes back. In a model picker `space` toggles a
-row, `tab` takes everything the filter shows (again to undo), and `enter` with
-nothing ticked takes the highlighted row.
+The initial provider browser's right-hand connection fields are editable too:
+endpoint, API, key and developer-role setting save directly on confirmation.
+Keys stay masked; leaving the key input blank keeps the saved key.
 
-Model metadata is shown compactly — `128K ctx • 16.4K out • image · models.dev`
-— with the source named once at the end (nothing when the gateway reported it
-all).
+The normal model workspace is a single-selection browser, **without checkboxes**.
+The list shows model names; the inspector holds the metadata, avoiding duplicate
+summaries and repeated help text. **Add**, **Discover**, **Refresh**, **Overrides**,
+**Settings** and **Remove** are directly visible. **Save / Discard** appear when
+there are unsaved edits; buttons wrap instead of being hidden on narrow terminals.
 
-### Edit / delete
+| Key | Action |
+| --- | --- |
+| Type in the list | Filter models |
+| `↑↓`, `PgUp/PgDn`, `Home/End` | Browse models or navigate inspector fields |
+| `→` on a model | Inspect/edit without changing selection |
+| `Enter` in a selection list | Confirm checked models; never toggle a row |
+| `Enter` on an editable field | Edit directly in the inspector, without another popup |
+| `↑` on the first row / `↓` on the last | Enter the action bar; use arrows and `Enter` to run |
+| `Ctrl+K` outside a field edit | Jump directly to the action bar |
+| `Tab` / `Shift+Tab` | Optional alternate focus navigation |
+| `Esc` | Cancel the current field edit; otherwise return to the list, clear its filter, then go back |
 
-Picking a provider gives you: re-probe, per-model edits (reasoning ceiling,
-image input, context window, max output, headers/endpoint override, refresh
-metadata), add or bulk-delete models, API key, endpoint, API flavor, the
-developer-role switch (on / off / detect), rename, and delete.
+Context/output limits accept `128000`, `128K` and `1M`. Empty input restores the
+displayed source default. Choices mark their default value with its source;
+other values are labelled `custom`. Use Space or arrows to change a choice and
+Enter to accept it; Esc cancels. **Save / Ctrl+S** writes model-workspace drafts.
+Leaving with unsaved edits offers save, discard or keep editing.
 
-**Re-probe for models** re-reads `/models` and puts everything in one list:
-new models, metadata changes (`ctx 128K→1M`, `image off→on`), and
-models that vanished (`unsupported`). `[x]` apply, `[-]` keep stored values,
-`[ ]` remove/skip.
+Catalog/discovery selections and model removal use checkboxes:
+**Space** toggles the current row, **Ctrl+A** toggles all selectable filtered rows,
+and **Enter confirms**. **Right** opens details/customization; Ctrl+S remains an
+optional confirmation shortcut. Nothing is submitted with an empty selection.
+A hidden-selection count appears when checked models are outside the filter.
+
+Direct shortcuts: `Ctrl+N` add, `Ctrl+R` discover, `Ctrl+U` refresh metadata,
+`Ctrl+O` model overrides, `Ctrl+E` provider settings and `Ctrl+D` remove models.
+Provider connection changes save immediately. In Remove, nothing is prechecked:
+Space chooses models and Enter commits the removals. Deleting an entire provider
+still has a separate confirmation.
+
+**Refresh / Ctrl+U** is fully automatic: catalog mirrors use the same configured
+models.dev table as background sync; custom endpoints use gateway metadata and
+automatic catalog matching by endpoint/model ID. Reliable changes are saved
+without source/site pickers or an extra confirmation. Missing fields keep their
+stored values; guesses never overwrite them. Only the selected model is touched,
+and unsaved draft edits are preserved.
+
+Refresh updates each field in this order: gateway or exact catalog data, saved
+value, inferred value, then unknown. It preserves explicit custom edits.
+
+Metadata is grouped into limits, capabilities and prices. Fresh fields retain
+individual source labels (`gateway`, `models.dev`, `rule / ID hint`, `default`).
+Defaults are guesses, not measured capabilities. Unknown prices are not free.
+Price editors in Add, Discover and the saved-model inspector expose input,
+output, cache-read and cache-write rates in **USD per 1M tokens**. Explicit `0`
+means free; blank restores that rate's default. For custom pricing, input and
+output must both be configured; optional cache rates default to `0`. Invalid or
+negative rates stay inline and cannot be saved. Saved metadata does not invent
+provenance that the store never recorded. Header values and full API keys are
+never shown in inspectors.
+
+### Review discovery
+
+Discovery uses the same checkbox rules, on one screen: check a **new** model to
+add it, or a **changed** model to update the displayed metadata differences.
+Enter commits the checked changes in one write, without another review wizard.
+Right opens inline context/output/image/reasoning editing. Empty numeric input
+restores the default; default choices carry their source and overrides show
+`custom`. Editing a model checks it automatically. Even unchanged models can be
+customized; **not returned** models remain read-only and retained.
+Discovery never deletes models; use **Remove** for explicit removal.
 
 ## What gets filled in for you
 
@@ -80,12 +140,14 @@ Each model field is resolved from the best source available, highest first:
    Qwen, Kimi, GLM, Gemini, ...), tagged `[local rules]`. Relay-decorated ids
    like `bailian/deepseek-v4-pro` still match. Extend it with
    `~/.model-probe-rules.json` (see [model-probe](https://github.com/real-wudaoshi/model-probe#custom-rules)).
-4. **Protocol defaults** — reasonable limits per API flavor when nothing else
-   knows them (hidden from the UI, since they're guesses).
+4. **Protocol defaults** — fallback limits when nothing else knows them,
+   explicitly labeled `default` (a guess) in discovery inspectors.
 
-Prices come from the gateway or models.dev only — never guessed — so pi can
-show session cost for custom providers too. Relay prices are the maker's list
-price and may differ from what the relay bills.
+Prices come from the gateway, models.dev, or explicit user settings. A
+normalized model ID can supply reference rates and reasoning effort levels.
+The inspector labels each borrowed field with `infer`, the matched model and
+the catalog provider. Pi uses the rates for session cost estimates. Catalog
+prices may differ from gateway billing and can be edited.
 
 Endpoints that reject the OpenAI `developer` role are detected once and get
 `compat.supportsDeveloperRole: false`, so pi sends `system` instead of failing.
@@ -120,8 +182,8 @@ whole file) to freeze it into a plain static provider.
 ### Coming from an older version
 
 Versions before 2.0 wrote into pi's `models.json` and `auth.json`. If entries
-are still there, `/custom-provider` shows a **Move N providers out of
-models.json** action: pick what to move, and those providers (plus their keys)
+are still there, `/custom-provider` shows an **Import legacy (N)**
+action: pick what to move, and those providers (plus their keys)
 are copied into the extension's own store under their `custom-` names and
 removed from pi's files. Anything you didn't pick stays untouched.
 

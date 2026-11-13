@@ -1,61 +1,8 @@
+import { normalizeBaseUrl } from "model-probe";
 import type { ProviderApi } from "./types.ts";
 
-export function hasExplicitScheme(input: string): boolean {
-	return /^[a-z]+:\/\//i.test(input.trim());
-}
-
-export function addDefaultScheme(input: string): string {
-	if (hasExplicitScheme(input)) return input;
-	const lower = input.toLowerCase();
-	const isLocal =
-		lower.startsWith("localhost") ||
-		lower.startsWith("127.") ||
-		lower.startsWith("0.0.0.0") ||
-		lower.startsWith("10.") ||
-		lower.startsWith("192.168.") ||
-		lower.startsWith("172.16.") ||
-		lower.startsWith("172.17.") ||
-		lower.startsWith("172.18.") ||
-		lower.startsWith("172.19.") ||
-		lower.startsWith("172.20.") ||
-		lower.startsWith("172.21.") ||
-		lower.startsWith("172.22.") ||
-		lower.startsWith("172.23.") ||
-		lower.startsWith("172.24.") ||
-		lower.startsWith("172.25.") ||
-		lower.startsWith("172.26.") ||
-		lower.startsWith("172.27.") ||
-		lower.startsWith("172.28.") ||
-		lower.startsWith("172.29.") ||
-		lower.startsWith("172.30.") ||
-		lower.startsWith("172.31.") ||
-		lower.startsWith("[");
-	return `${isLocal ? "http" : "https"}://${input}`;
-}
-
-function stripSuffix(pathname: string, suffix: string): string {
-	return pathname.endsWith(suffix) ? pathname.slice(0, -suffix.length) || "/" : pathname;
-}
-
-export function normalizeEndpoint(input: string, api: ProviderApi): string {
-	const url = new URL(addDefaultScheme(input.trim()));
-	let pathname = url.pathname.replace(/\/+$/, "") || "/";
-
-	if (api === "openai-completions" || api === "openai-responses") {
-		pathname = stripSuffix(pathname, "/chat/completions");
-		pathname = stripSuffix(pathname, "/responses");
-		pathname = stripSuffix(pathname, "/completions");
-		pathname = stripSuffix(pathname, "/models");
-	} else if (api === "google-generative-ai") {
-		// Gemini native: the base includes the version path (…/v1beta).
-		pathname = stripSuffix(pathname, "/models");
-	} else {
-		pathname = stripSuffix(pathname, "/messages");
-	}
-
-	pathname = pathname === "/" ? "" : pathname;
-	const port = url.port ? `:${url.port}` : "";
-	return `${url.protocol}//${url.hostname}${port}${pathname}`;
+export function normalizeEndpoint(input: string, _api: ProviderApi): string {
+	return normalizeBaseUrl(input);
 }
 
 export function slugify(value: string): string {
@@ -67,7 +14,7 @@ export function slugify(value: string): string {
 }
 
 export function suggestProviderId(endpoint: string): string {
-	const url = new URL(addDefaultScheme(endpoint));
+	const url = new URL(normalizeBaseUrl(endpoint));
 	const host = url.hostname.replace(/^www\./, "").replace(/^api\./, "");
 	// Bare slug — the "custom." marker is added centrally by ensureCustomId.
 	return slugify(`${host}${url.port ? `-${url.port}` : ""}`) || "provider";
@@ -75,26 +22,4 @@ export function suggestProviderId(endpoint: string): string {
 
 export function dedupe(values: string[]): string[] {
 	return Array.from(new Set(values));
-}
-
-export function buildProbeUrl(baseUrl: string): string {
-	const withSlash = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
-	return new URL("models", withSlash).toString();
-}
-
-export function getPath(obj: any, path: string): any {
-	let current = obj;
-	for (const key of path.split(".")) {
-		if (!current || typeof current !== "object") return undefined;
-		current = current[key];
-	}
-	return current;
-}
-
-export function firstFiniteNumber(obj: any, ...paths: string[]): number | undefined {
-	for (const path of paths) {
-		const value = getPath(obj, path);
-		if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
-	}
-	return undefined;
 }

@@ -17,10 +17,9 @@
 // to make a provider work.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fetchModelsDevModels } from "model-probe";
-import type { ModelProbeInfo } from "model-probe";
+import { fetchModelMetadata } from "model-probe";
 import { AGENT_DIR, loadModelsConfig, saveModelsConfig } from "./config.ts";
-import { buildModelEntry, modelIdOf, modelOptionsFromProbe, applyReasoning } from "./model-entry.ts";
+import { applyModelMetadata, buildModelEntry, modelIdOf, modelOptionsFromProbe } from "./model-entry.ts";
 
 export const SYNC_STATE_PATH = join(AGENT_DIR, "custom-provider-sync.json");
 
@@ -104,46 +103,6 @@ export function suppressModels(providerId: string, modelIds: string[]): void {
 	saveSyncState(state);
 }
 
-// Write the catalog's authoritative fields onto a stored entry. Only fields
-// the catalog actually reports are touched, and only when they differ — a
-// value the catalog doesn't know stays as the user left it.
-function applyCatalogMetadata(entry: any, info: ModelProbeInfo): boolean {
-	let changed = false;
-	if (info.contextWindow !== undefined && entry.contextWindow !== info.contextWindow) {
-		entry.contextWindow = info.contextWindow;
-		changed = true;
-	}
-	if (info.maxTokens !== undefined && entry.maxTokens !== info.maxTokens) {
-		entry.maxTokens = info.maxTokens;
-		changed = true;
-	}
-	if (info.image !== undefined) {
-		const hasImage = Array.isArray(entry.input) && entry.input.includes("image");
-		if (hasImage !== info.image) {
-			entry.input = info.image ? ["text", "image"] : ["text"];
-			changed = true;
-		}
-	}
-	if (info.reasoning !== undefined && (entry.reasoning === true) !== info.reasoning) {
-		applyReasoning(entry, info.reasoning ? "xhigh" : "off");
-		changed = true;
-	}
-	if (info.cost) {
-		const old = entry.cost && typeof entry.cost === "object" ? entry.cost : undefined;
-		const same =
-			old !== undefined &&
-			old.input === info.cost.input &&
-			old.output === info.cost.output &&
-			(old.cacheRead ?? 0) === info.cost.cacheRead &&
-			(old.cacheWrite ?? 0) === info.cost.cacheWrite;
-		if (!same) {
-			entry.cost = info.cost;
-			changed = true;
-		}
-	}
-	return changed;
-}
-
 export type SyncResult = { added: number; updated: number; removed: number };
 
 // One provider's sync. Returns null when the provider isn't mirrored (or has
@@ -158,9 +117,10 @@ export async function syncProvider(providerId: string): Promise<SyncResult | nul
 	// months older than the store — syncing against that would delete models
 	// released since, and resurrect ones the user never chose. Throws instead,
 	// which callers treat as "try again next session".
-	const catalog = await fetchModelsDevModels(managed.modelsDevProviderId, { requireLive: true });
+	const { infoById: catalog } = await fetchModelMetadata([], { catalogProviderId: managed.modelsDevProviderId, requireLiveCatalog: true });
 	const config = loadModelsConfig();
 	const provider = config.providers?.[providerId];
+	if (managedProvider(providerId)?.modelsDevProviderId !== managed.modelsDevProviderId) return null;
 	if (!provider) {
 		unmarkManaged(providerId);
 		return null;
@@ -192,9 +152,11 @@ export async function syncProvider(providerId: string): Promise<SyncResult | nul
 			result.added++;
 			continue;
 		}
-		// Strings become objects so the metadata has somewhere to live.
-		if (typeof models[index] === "string") models[index] = { id, input: ["text"] };
-		if (applyCatalogMetadata(models[index], info)) result.updated++;
+		const entry = typeof models[index] === "string" ? { id } : models[index];
+		if (applyModelMetadata(entry, info)) {
+			models[index] = entry;
+			result.updated++;
+		}
 	}
 
 	provider.models = models;

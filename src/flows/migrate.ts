@@ -4,6 +4,7 @@
 import { ensureCustomId, importLegacyProviders, readLegacyProviders } from "../config.ts";
 import type { CommandContext } from "../types.ts";
 import { pickMany } from "../ui/select.ts";
+import { panelConfirm } from "../ui/panel.ts";
 
 export async function migrateLegacyFlow(ctx: CommandContext): Promise<void> {
 	const legacy = readLegacyProviders();
@@ -28,7 +29,7 @@ export async function migrateLegacyFlow(ctx: CommandContext): Promise<void> {
 	if (!picked || picked.length === 0) return;
 
 	const target = (id: string) => ensureCustomId(id);
-	const confirmed = await ctx.ui.confirm(
+	const confirmed = await panelConfirm(ctx,
 		"Move providers?",
 		`Move ${picked.length} provider${picked.length === 1 ? "" : "s"} into this extension's own store:\n` +
 			`${picked.map((id) => `- ${id} → ${target(id)}`).join("\n")}\n\n` +

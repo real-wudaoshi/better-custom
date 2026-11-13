@@ -31,7 +31,7 @@
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=20.6.0"
+    "node": ">=22"
   },
   "files": [
     "index.ts",
@@ -54,7 +54,7 @@
     ]
   },
   "dependencies": {
-    "model-probe": "^0.8.1"
+    "model-probe": "^0.8.2"
   },
   "peerDependencies": {
     "@mariozechner/pi-coding-agent": "*",
@@ -70,6 +70,6 @@
   },
   "scripts": {
     "build": "echo 'No build step required'",
-    "check": "node --check index.ts && node --check src/types.ts && node --check src/config.ts && node --check src/registration.ts && node --check src/url.ts && node --check src/format.ts && node --check src/api-key.ts && node --check src/model-entry.ts && node --check src/modelsdev-sync.ts && node --check src/ui/select.ts && node --check src/ui/prompts.ts && node --check src/flows/shared.ts && node --check src/flows/add.ts && node --check src/flows/edit.ts && node --check src/flows/migrate.ts"
+    "check": "node --check index.ts && node --check src/types.ts && node --check src/config.ts && node --check src/registration.ts && node --check src/url.ts && node --check src/format.ts && node --check src/api-key.ts && node --check src/model-entry.ts && node --check src/modelsdev-sync.ts && node --check src/ui/panel.ts && node --check src/ui/workbench.ts && node --check src/ui/metadata.ts && node --check src/ui/review.ts && node --check src/ui/select.ts && node --check src/ui/prompts.ts && node --check src/flows/shared.ts && node --check src/flows/add.ts && node --check src/flows/edit.ts && node --check src/flows/migrate.ts"
   }
 }

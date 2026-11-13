@@ -1,4 +1,4 @@
-import { resolveModelInfo } from "model-probe";
+import { getMetadataProvenance, metadataUpdateFields, savedModelMetadata } from "model-probe";
 import { PI_THINKING_LEVELS, REASONING_LEVELS } from "./types.ts";
 import type {
 	ApiKeyMode,
@@ -27,7 +27,8 @@ function buildThinkingMapFromEffortOptions(options: string[]): Record<string, st
 	const supported = new Map<string, string>();
 	for (const raw of options) {
 		const option = raw.trim();
-		const level = EFFORT_ALIASES[option.toLowerCase()];
+		const key = option.toLowerCase();
+		const level = Object.hasOwn(EFFORT_ALIASES, key) ? EFFORT_ALIASES[key] : undefined;
 		if (level && !supported.has(level)) supported.set(level, option);
 	}
 	const map: Record<string, string | null> = {};
@@ -58,6 +59,7 @@ export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback
 		contextWindow: info.contextWindow ?? fallback.contextWindow,
 		maxTokens: info.maxTokens ?? fallback.maxTokens,
 		cost: info.cost ?? fallback.cost,
+		metadataProvenance: getMetadataProvenance(info),
 	};
 
 	if (info.reasoning === false) {
@@ -69,8 +71,11 @@ export function modelOptionsFromProbe(info: ModelProbeInfo | undefined, fallback
 			opts.thinkingLevelMap = { off: null };
 		} else if (info.effortOptions && info.effortOptions.length > 0) {
 			const map = buildThinkingMapFromEffortOptions(info.effortOptions);
-			opts.reasoning = ceilingFromThinkingMap(map);
-			opts.thinkingLevelMap = map;
+			const ceiling = ceilingFromThinkingMap(map);
+			if (ceiling !== "off") {
+				opts.reasoning = ceiling;
+				opts.thinkingLevelMap = map;
+			}
 		}
 		// reasoning === true with no level info: keep the wizard's default ceiling.
 	}
@@ -126,7 +131,9 @@ export function buildModelEntry(
 	}
 
 	// List prices so pi's usage accounting can estimate cost for custom
-	// providers too. Only real sources (gateway-reported or models.dev).
+	// providers too. Rates are reported by the gateway/catalog or set explicitly
+	// by the user. Borrowed catalog rates retain their inferred provenance.
+	if (opts.metadataProvenance) entry.metadataProvenance = opts.metadataProvenance;
 	if (opts.cost) {
 		entry.cost = opts.cost;
 	}
@@ -165,13 +172,13 @@ export function buildProviderConfig(
 			// resolveModelInfo layers detected metadata over models.dev, the local
 			// rules, the api fallback, and the built-in defaults — including for
 			// manually added models, which have no probe info at all.
-			const info = resolveModelInfo(id, infoById?.get(id), undefined, api);
+			const info = infoById?.get(id);
 			const override = optionOverrides?.get(id);
 			const modelOpts = override
 				? {
 						...override,
-						contextWindow: override.contextWindow ?? info.contextWindow,
-						maxTokens: override.maxTokens ?? info.maxTokens,
+						contextWindow: override.contextWindow ?? info?.contextWindow,
+						maxTokens: override.maxTokens ?? info?.maxTokens,
 					}
 				: modelOptionsFromProbe(info, opts);
 			return buildModelEntry(id, modelOpts, ceilingOverrides);
@@ -224,6 +231,93 @@ export function readModelOptions(model: any): ModelOptions {
 export function readCeilingString(model: any, level: "xhigh" | "max"): string | undefined {
 	const v = model?.thinkingLevelMap?.[level];
 	return typeof v === "string" ? v : undefined;
+}
+
+export function storedMetadata(raw: any): ModelProbeInfo {
+	const model = typeof raw === "string" ? { id: raw } : raw ?? {};
+	const map = model.thinkingLevelMap;
+	const provenance = model.metadataProvenance;
+	const savedLevels = model.reasoning === true && map && typeof map === "object" && provenance?.alwaysThinking === undefined
+		? PI_THINKING_LEVELS.flatMap((level) => map[level] === null || ((level === "max" || level === "xhigh") && map[level] === undefined)
+			? [] : [typeof map[level] === "string" ? map[level] : level === "off" ? "none" : level])
+		: undefined;
+	return savedModelMetadata({
+		contextWindow: model.contextWindow, maxTokens: model.maxTokens, cost: model.cost,
+		image: Array.isArray(model.input) ? model.input.includes("image") : undefined,
+		reasoning: typeof model.reasoning === "boolean" ? model.reasoning : provenance?.reasoning ? false : undefined,
+		alwaysThinking: model.reasoning === true && map?.off === null && (provenance?.alwaysThinking || !savedLevels?.length) ? true : undefined,
+		effortOptions: savedLevels?.length ? savedLevels : undefined,
+	}, provenance);
+}
+
+type ModelMetadataChange = { field: "contextWindow" | "maxTokens" | "image" | "cost" | "reasoning" | "effortOptions" | "alwaysThinking"; before: unknown; after: unknown };
+
+function syncModelMetadata(entry: any, info: ModelProbeInfo, apply: boolean): ModelMetadataChange[] {
+	const saved = storedMetadata(entry);
+	const fields = new Set(metadataUpdateFields(info, saved));
+	const provenance = getMetadataProvenance(info), previous = getMetadataProvenance(saved);
+	const changes: ModelMetadataChange[] = [];
+	const record = (field: ModelMetadataChange["field"], before: unknown, after: unknown, write: () => void, representationChanged = false) => {
+		const verified = previous[field]?.infer && !provenance[field]?.infer;
+		if (JSON.stringify(before) === JSON.stringify(after) && !representationChanged && !verified) return;
+		changes.push({ field, before, after });
+		if (apply) {
+			write();
+			(entry.metadataProvenance ??= {})[field] = provenance[field];
+		}
+	};
+	for (const field of ["contextWindow", "maxTokens", "image", "cost"] as const) {
+		if (!fields.has(field)) continue;
+		const before = field === "cost" && saved.cost ? [saved.cost.input, saved.cost.output, saved.cost.cacheRead ?? 0, saved.cost.cacheWrite ?? 0] : saved[field];
+		const after = field === "cost" && info.cost ? [info.cost.input, info.cost.output, info.cost.cacheRead, info.cost.cacheWrite] : info[field];
+		record(field, before, after, () => {
+			if (field === "image") entry.input = info.image ? ["text", "image"] : ["text"];
+			else entry[field] = info[field];
+		});
+	}
+
+	const updateReasoning = fields.has("reasoning");
+	const reasoning = updateReasoning ? info.reasoning : saved.reasoning;
+	const levelField = fields.has("alwaysThinking") && info.alwaysThinking ? "alwaysThinking"
+		: fields.has("effortOptions") ? "effortOptions" : undefined;
+	if (updateReasoning) {
+		record("reasoning", saved.reasoning, reasoning, () => {
+			if (reasoning) {
+				if (saved.reasoning !== true) applyReasoning(entry, "xhigh");
+			} else {
+				applyReasoning(entry, "off");
+				delete entry.metadataProvenance?.effortOptions;
+				delete entry.metadataProvenance?.alwaysThinking;
+			}
+		});
+	}
+	if (levelField && reasoning !== false) {
+		const options = modelOptionsFromProbe({
+			reasoning: true,
+			effortOptions: levelField === "effortOptions" ? info.effortOptions : undefined,
+			alwaysThinking: levelField === "alwaysThinking",
+		}, { reasoning: "xhigh", image: false });
+		const map = options.thinkingLevelMap;
+		if (map) {
+			const oldMap = entry.thinkingLevelMap;
+			const before = saved.alwaysThinking ? "always on" : saved.effortOptions?.join("/") ?? (oldMap ? readModelOptions(entry).reasoning : undefined);
+			const after = levelField === "alwaysThinking" ? "always on" : info.effortOptions?.join("/");
+			record(levelField, before, after, () => {
+				entry.reasoning = true;
+				entry.thinkingLevelMap = map;
+				delete entry.metadataProvenance?.[levelField === "alwaysThinking" ? "effortOptions" : "alwaysThinking"];
+			}, JSON.stringify(oldMap) !== JSON.stringify(map));
+		}
+	}
+	return changes;
+}
+
+export function modelMetadataChanges(raw: any, info: ModelProbeInfo): ModelMetadataChange[] {
+	return syncModelMetadata(typeof raw === "string" ? { id: raw } : raw ?? {}, info, false);
+}
+
+export function applyModelMetadata(entry: any, info: ModelProbeInfo): number {
+	return syncModelMetadata(entry, info, true).length;
 }
 
 export function modelIdOf(model: any): string {

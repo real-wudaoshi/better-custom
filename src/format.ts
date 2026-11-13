@@ -1,3 +1,4 @@
+import { getMetadataProvenance, getMetadataSourceLabel, type MetadataField } from "model-probe";
 // How model metadata is shown. One place, so pickers, menus and diffs agree.
 import { readModelOptions } from "./model-entry.ts";
 import type { ModelProbeInfo } from "./types.ts";
@@ -11,19 +12,22 @@ export function formatTokens(value: number): string {
 	return String(value);
 }
 
+export function parseTokenInput(input: string): number | undefined {
+	const match = /^(\d+(?:\.\d+)?)\s*([km])?$/i.exec(input.trim().replace(/[_,]/g, ""));
+	if (!match) return undefined;
+	const value = Number(match[1]) * (match[2]?.toLowerCase() === "m" ? 1_000_000 : match[2] ? 1000 : 1);
+	return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
 export function formatCost(cost: { input: number; output: number }): string {
 	return `$${cost.input}/$${cost.output}`;
 }
 
-type Origin = "gateway" | "models.dev" | "local rules";
+type Origin = string;
 
-// Where a field's value came from; undefined for built-in defaults, which say
-// nothing about the model.
 function originOf(info: ModelProbeInfo, field: string): Origin | undefined {
-	if ((info.defaultedFields as string[] | undefined)?.includes(field)) return undefined;
-	if ((info.inferredFields as string[] | undefined)?.includes(field)) return "local rules";
-	if ((info.modelsDevFields as string[] | undefined)?.includes(field)) return "models.dev";
-	return "gateway";
+	const label = getMetadataSourceLabel(info, field as MetadataField);
+	return label === "default" ? undefined : label;
 }
 
 // One line for freshly resolved metadata: "128K ctx • 16.4K out • image ·
@@ -74,12 +78,12 @@ export function summarizeOrigins(ids: string[], infoById: Map<string, ModelProbe
 	for (const id of ids) {
 		const info = infoById?.get(id);
 		const origins = new Set<Origin | undefined>(
-			info ? (["contextWindow", "maxTokens", "image", "video", "reasoning", "cost"] as const).filter((field) => info[field] !== undefined).map((field) => originOf(info, field)) : [],
+			info ? (["contextWindow", "maxTokens", "image", "video", "reasoning", "cost"] as const).filter((field) => info[field] !== undefined).map((field) => { const trace = getMetadataProvenance(info)[field]; return trace?.infer ? "infer" : trace?.source; }) : [],
 		);
-		const best = (["gateway", "models.dev", "local rules"] as const).find((origin) => origins.has(origin)) ?? "defaults";
+		const best = (["gateway", "models.dev", "infer"] as const).find((origin) => origins.has(origin)) ?? "defaults";
 		counts.set(best, (counts.get(best) ?? 0) + 1);
 	}
-	return ["gateway", "models.dev", "local rules", "defaults"]
+	return ["gateway", "models.dev", "infer", "defaults"]
 		.filter((origin) => counts.has(origin))
 		.map((origin) => `${origin} ${counts.get(origin)}`)
 		.join(" • ");

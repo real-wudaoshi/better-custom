@@ -1,306 +1,143 @@
+import { Key } from "@mariozechner/pi-tui";
 import {
-	chatModelCandidates,
-	fetchModelsDevInfoForBaseUrl,
-	fetchModelsDevModels,
-	fetchModelsDevProviders,
-	finalizeModelInfo,
-	probeDeveloperRole,
-	probeInfoSummary,
-	probeModels,
-	type ModelsDevProvider,
+	chatModelCandidates, fetchModelMetadata, fetchModelsDevProviders, probeDeveloperRole,
+	type ModelsDevProvider, type MetadataContext,
 } from "model-probe";
 import { resolveApiKeyForProbe } from "../api-key.ts";
 import { loadModelsConfig, STORE_PATH } from "../config.ts";
 import { summarizeOrigins } from "../format.ts";
 import { buildProviderConfig } from "../model-entry.ts";
-import { AUTO_PROBE_PROFILE } from "../presets.ts";
-import type { ApiKeyMode, CommandContext, ModelOptions, ModelProbeInfo, ModelsConfig, ProviderApi, ProviderStyle } from "../types.ts";
-import { pickMany, selectOne } from "../ui/select.ts";
-import { promptApiKey, promptEndpoint, promptManualModels, promptProviderId, promptProviderStyle } from "../ui/prompts.ts";
-import { buildProbeUrl, dedupe, hasExplicitScheme, normalizeEndpoint } from "../url.ts";
+import type { CommandContext, ModelProbeInfo } from "../types.ts";
+import { panelConfirm } from "../ui/panel.ts";
+import { selectOne } from "../ui/select.ts";
+import { promptManualModels, promptProviderConnection, type ProviderConnection } from "../ui/prompts.ts";
+import { editedModelOptions, editorDefaults } from "../ui/metadata.ts";
+import { reviewChanges, reviewState, type ReviewItem } from "../ui/review.ts";
 import { markManaged } from "../modelsdev-sync.ts";
-import { collectProbedModelInfo, fetchGatewayWideInfo, findProvidersByEndpoint, persistApiKey, persistProvider, probePickerItems } from "./shared.ts";
+import { findProvidersByEndpoint, persistApiKey, persistProvider } from "./shared.ts";
 
-// Manual model entry (id → per-model metadata menu) lives in ui/prompts.ts as
-// promptManualModels; every "add by hand" path below funnels through it.
-
-// Pick a known API provider from the models.dev catalog.
 async function pickCatalogProvider(ctx: CommandContext): Promise<ModelsDevProvider | null> {
 	ctx.ui.notify("Fetching the models.dev provider catalog ...", "info");
-	let providers: Map<string, ModelsDevProvider>;
 	try {
-		providers = await fetchModelsDevProviders();
-	} catch (error) {
-		ctx.ui.notify(`Could not fetch the models.dev catalog: ${error instanceof Error ? error.message : String(error)}`, "error");
-		return null;
-	}
-
-	const items = [...providers.values()]
-		.sort((a, b) => a.name.localeCompare(b.name))
-		.map((p) => ({
-			value: p.id,
-			label: p.name,
-			suffix: ` • ${p.baseUrl}`,
-			description: p.env.length > 0 ? `env: ${p.env.join(" / ")}` : undefined,
-			searchText: `${p.id} ${p.name} ${p.baseUrl}`,
-		}));
-	const choice = await selectOne(ctx, "models.dev providers", items);
-	if (!choice) return null;
-	return providers.get(choice) ?? null;
+		const providers = await fetchModelsDevProviders();
+		const picked = await selectOne(ctx, "models.dev providers", [...providers.values()].sort((a, b) => a.name.localeCompare(b.name)).map((provider) => ({
+			value: provider.id, label: provider.name, description: provider.baseUrl, searchText: `${provider.id} ${provider.name} ${provider.baseUrl}`,
+		})));
+		return picked ? providers.get(picked) ?? null : null;
+	} catch (error) { ctx.ui.notify(`Could not fetch the catalog: ${String(error)}`, "error"); return null; }
 }
 
-async function confirmEndpointReuse(ctx: CommandContext, normalizedEndpoint: string): Promise<boolean> {
-	let config: ModelsConfig;
+async function confirmEndpointReuse(ctx: CommandContext, endpoint: string): Promise<boolean> {
 	try {
-		config = loadModelsConfig();
-	} catch (error) {
-		ctx.ui.notify(`Could not read ${STORE_PATH}: ${error instanceof Error ? error.message : String(error)}`, "error");
-		return false;
-	}
-
-	const providersWithSameEndpoint = findProvidersByEndpoint(config, normalizedEndpoint);
-	if (providersWithSameEndpoint.length === 0) return true;
-
-	return ctx.ui.confirm(
-		"Endpoint already exists",
-		`This endpoint is already used by:\n${providersWithSameEndpoint.map((id) => `- ${id}`).join("\n")}\n\nAdd another provider with the same endpoint?`,
-	);
+		const existing = findProvidersByEndpoint(loadModelsConfig(), endpoint);
+		return !existing.length || await panelConfirm(ctx, "Endpoint already exists", `Already used by ${existing.join(", ")}. Add another provider at this endpoint?`);
+	} catch (error) { ctx.ui.notify(`Could not read ${STORE_PATH}: ${String(error)}`, "error"); return false; }
 }
 
-// Catalog path: the provider is known to models.dev, so the model list and
-// its metadata come from the catalog — no probing of the gateway at all.
-async function addFromCatalog(ctx: CommandContext) {
-	const provider = await pickCatalogProvider(ctx);
-	if (!provider) return;
-
-	// Catalog providers are OpenAI-compatible by construction (they carry a
-	// baseUrl); chat completions is the flavor every one of them supports.
-	const style: ProviderStyle = "openai";
-	const api: ProviderApi = "openai-completions";
-
-	let endpoint: string;
-	try {
-		endpoint = normalizeEndpoint(provider.baseUrl, api);
-	} catch (error) {
-		ctx.ui.notify(`Invalid catalog endpoint "${provider.baseUrl}": ${error instanceof Error ? error.message : String(error)}`, "error");
-		return;
-	}
-	if (!(await confirmEndpointReuse(ctx, endpoint))) return;
-
-	if (provider.env.length > 0) {
-		ctx.ui.notify(`${provider.name} expects the ${provider.env.join(" / ")} env var.`, "info");
-	}
-	const providerId = await promptProviderId(ctx, endpoint, provider.id);
-	if (!providerId) return;
-
-	const apiKey = await promptApiKey(ctx);
-	if (!apiKey) return;
-	if (apiKey.mode === "none") {
-		ctx.ui.notify('No API key selected. A "dummy" key is stored so the provider still loads.', "info");
-	}
-
-	ctx.ui.notify(`Fetching the model list for ${provider.name} from models.dev ...`, "info");
-	const catalog = await fetchModelsDevModels(provider.id);
-	let ids: string[];
-	let infoById: Map<string, ModelProbeInfo> | undefined;
-	let overrides: Map<string, ModelOptions> | undefined;
-	if (catalog.size > 0) {
-		const picked = await pickMany(ctx, "Select models", probePickerItems([...catalog.keys()], new Map(), catalog, api));
-		if (!picked || picked.length === 0) return;
-		ids = picked;
-		infoById = finalizeModelInfo(picked, [], { modelsDev: catalog, api });
-	} else {
-		ctx.ui.notify(`models.dev lists no models for ${provider.name} — enter ids by hand.`, "warning");
-		const manual = await promptManualModels(ctx, style);
-		if (!manual) return;
-		ids = manual.ids;
-		overrides = manual.options;
-	}
-
-	// No gateway calls on this path — developer-role support stays at the safe
-	// default (off). Flip it later via Edit provider if the endpoint supports it.
-	const providerConfig = buildProviderConfig(
-		style,
-		api,
-		endpoint,
-		apiKey,
-		dedupe(ids),
-		// The reasoning ceiling for thinking models defaults to xhigh; image /
-		// context / reasoning come from the catalog. Tune per model later via
-		// Edit provider → Edit a model.
-		{ reasoning: "xhigh", image: true },
-		undefined,
-		infoById,
-		undefined,
-		overrides,
-	);
-	if (!(await persistProvider(ctx, providerId, providerConfig))) return;
-	persistApiKey(ctx, providerId, apiKey, style);
-
-	const withMeta = infoById ? ids.filter((id) => probeInfoSummary(infoById.get(id) ?? {}).length > 0).length : 0;
-	ctx.ui.notify(
-		`Saved provider "${providerId}" to ${STORE_PATH} — models and metadata from models.dev` +
-			(withMeta > 0 ? ` (${withMeta} model${withMeta === 1 ? "" : "s"} with metadata)` : ""),
-		"info",
-	);
-
-	// The catalog is the source of truth on this path, so the provider mirrors
-	// it from now on: a sync at session start adds newly published models,
-	// refreshes metadata/prices, and drops what the catalog dropped. Models the
-	// user did NOT pick here are recorded as suppressed, so a later sync adds
-	// new models without resurrecting the ones skipped on purpose.
-	if (catalog.size > 0) {
-		markManaged(providerId, provider.id, ids, [...catalog.keys()]);
-		ctx.ui.notify(`"${providerId}" will track the ${provider.name} catalog on every start.`, "info");
-	}
-	ctx.ui.notify("Open /model to use your new provider.", "info");
-}
-
-// Model collection for a custom endpoint. The endpoint is probed straight
-// away — no "auto or manual?" question first; typing ids by hand is offered
-// when the probe fails or finds nothing.
-async function collectModelIds(
-	ctx: CommandContext,
-	style: ProviderStyle,
-	api: ProviderApi,
-	apiKey: { mode: ApiKeyMode; value?: string },
-	normalizedEndpoint: string,
-	trimmedEndpointInput: string,
-): Promise<{ ids: string[]; infoById?: Map<string, ModelProbeInfo>; baseUrl?: string; options?: Map<string, ModelOptions> } | null> {
-	let baseUrl = normalizedEndpoint;
-	while (true) {
+// One draft owns both steps. No provider/auth writes happen until the model
+// step is confirmed. Back edits the same connection, rather than restarting.
+async function runProviderWizard(ctx: CommandContext, catalogProvider?: ModelsDevProvider): Promise<string | undefined> {
+	const preset = catalogProvider ? { endpoint: catalogProvider.baseUrl, suggestion: catalogProvider.id, catalog: catalogProvider.name } : undefined;
+	let connection: ProviderConnection | undefined;
+	let stage: "connection" | "models" = "connection";
+	let fingerprint = "", approvedEndpoint = "", issue: string | undefined;
+	let baseUrl = "", context: MetadataContext | undefined;
+	let catalogIds: string[] = [];
+	let infos = new Map<string, ModelProbeInfo>();
+	const manualIds = new Set<string>();
+	const modelState = reviewState();
+	const metadataOptions = () => ({
+		baseUrl: connection!.endpoint.normalized,
+		api: connection!.api,
+		apiKey: resolveApiKeyForProbe(connection!.apiKey.mode, connection!.apiKey.value),
+		ollama: connection!.style === "ollama",
+		catalogProviderId: catalogProvider?.id,
+	});
+	const discover = async () => {
+		issue = undefined;
 		try {
-			ctx.ui.notify(`Probing ${buildProbeUrl(baseUrl)} ...`, "info");
-			const probed = await probeModels(baseUrl, resolveApiKeyForProbe(apiKey.mode, apiKey.value));
-			// The variant that actually answered (±/v1 adapted) becomes the
-			// provider's baseUrl.
-			baseUrl = probed.baseUrl;
-			if (probed.ids.length === 0) {
-				ctx.ui.notify("Probe succeeded but returned no models. Switching to manual entry.", "warning");
-				const manual = await promptManualModels(ctx, style);
-				return manual ? { ...manual, baseUrl } : null;
-			}
-
-			// Gateway-wide metadata (one call per source) — fetch BEFORE the picker so
-			// it shows real detected values instead of catalog/rule guesses.
-			let gatewayWide: Map<string, ModelProbeInfo> | undefined;
-			if (AUTO_PROBE_PROFILE.modelInfo || AUTO_PROBE_PROFILE.publicCatalog || AUTO_PROBE_PROFILE.modelGroupInfo) {
-				ctx.ui.notify("Fetching model metadata (context, max-out, image/video, reasoning) ...", "info");
-				gatewayWide = await fetchGatewayWideInfo(style, apiKey, probed.baseUrl, AUTO_PROBE_PROFILE);
-				if (gatewayWide.size > 0) {
-					for (const [id, info] of gatewayWide) {
-						probed.infoById.set(id, { ...(probed.infoById.get(id) ?? {}), ...info });
-					}
-				}
-			}
-
-			// models.dev catalog tier — above the local rules, below detected values.
-			const modelsDev = style !== "ollama" && style !== "gemini" ? await fetchModelsDevInfoForBaseUrl(probed.baseUrl, probed.ids) : undefined;
-
-			const picked = await pickMany(ctx, "Select models", probePickerItems(probed.ids, probed.infoById, modelsDev, api));
-			if (!picked || picked.length === 0) return null;
-
-			const infoById = await collectProbedModelInfo(ctx, style, apiKey, probed.baseUrl, picked, probed.infoById, gatewayWide, modelsDev, api);
-			return { ids: picked, infoById, baseUrl };
+			const batch = await fetchModelMetadata([], {
+				...metadataOptions(), profile: { perModelDetails: false },
+			});
+			context = batch.context;
+			baseUrl = batch.baseUrl ?? metadataOptions().baseUrl;
+			catalogIds = catalogProvider ? batch.ids : [];
+			const manual = [...manualIds].filter((id) => !batch.infoById.has(id));
+			const extra = manual.length ? await fetchModelMetadata(manual, { ...metadataOptions(), context }) : undefined;
+			infos = new Map([...batch.infoById, ...(extra?.infoById ?? [])]);
+			if (!infos.size) issue = "No models returned. Use Add by ID or Back.";
 		} catch (error) {
-			const schemeHint = hasExplicitScheme(trimmedEndpointInput) ? "" : " No http:// or https:// was provided.";
-			ctx.ui.notify(`Auto probe failed: ${error instanceof Error ? error.message : String(error)}.${schemeHint}`, "warning");
-			const action = await selectOne(ctx, "Probe failed — what next?", [
-				{ value: "retry", label: "Retry", description: "Probe again" },
-				{ value: "manual", label: "Add models manually", description: "Enter model ids by hand" },
-				{ value: "cancel", label: "Cancel", description: "Abort adding this provider" },
-			]);
-			if (action === "retry") continue;
-			if (action === "manual") {
-				const manual = await promptManualModels(ctx, style);
-				return manual ? { ...manual, baseUrl } : null;
+			issue = "Discovery failed: " + String(error);
+		}
+	};
+	while (true) {
+		if (stage === "connection") {
+			const next = await promptProviderConnection(ctx, preset, connection);
+			if (!next) return;
+			connection = next;
+			if (approvedEndpoint !== next.endpoint.normalized) {
+				if (!(await confirmEndpointReuse(ctx, next.endpoint.normalized))) continue;
+				approvedEndpoint = next.endpoint.normalized;
 			}
-			return null;
+			const signature = JSON.stringify([next.endpoint.normalized, next.api, next.apiKey]);
+			if (signature !== fingerprint) {
+				fingerprint = signature; baseUrl = next.endpoint.normalized;
+				context = undefined; infos = new Map(); catalogIds = [];
+				await discover();
+			}
+			stage = "models";
 		}
+		const items: ReviewItem[] = [...infos].map(([id, info]) => ({ value: id, label: id, info, kind: "new", operations: ["skip", "add"], initial: "skip" }));
+		const result = await reviewChanges(ctx, "Add provider · 2/2 Models", items, {
+			state: modelState, applyLabel: "Create provider", subtitle: issue,
+			actions: [
+				{ id: "discover", label: catalogProvider ? "Reload catalog" : "Discover", key: Key.ctrl("r") },
+				{ id: "manual", label: "Add by ID", key: Key.ctrl("n") },
+				{ id: "back", label: "Back", key: Key.ctrl("b") },
+			],
+		});
+		if (!result || result.action === "back") { stage = "connection"; continue; }
+		if (result.action === "discover") { await discover(); continue; }
+		if (result.action === "manual") {
+			const manual = await promptManualModels(ctx, connection!.style, { defaults: infos, metadata: { ...metadataOptions(), context } });
+			if (manual) {
+				for (const id of manual.ids) {
+					manualIds.add(id);
+					infos.set(id, manual.infoById.get(id)!);
+					modelState.edits.set(id, manual.edits.get(id) ?? {}); modelState.selected.add(id);
+				}
+				// Returning from a child form must not leave focus on "Add by ID":
+				// Enter should confirm the new selection, not open that form again.
+				Object.assign(modelState.view, { query: "", value: manual.ids[0], focus: "list", bodyFocus: "list", detail: 0, scroll: 0, action: 0 });
+				issue = undefined;
+			}
+			continue;
+		}
+		if (result.action !== "apply") continue;
+		const ids = [...result.decisions].filter(([, action]) => action === "add").map(([id]) => id);
+		if (!ids.length) continue;
+		const { infoById } = await fetchModelMetadata(ids, { ...metadataOptions(), context });
+		const overrides = new Map(ids.map((id) => [id, editedModelOptions(editorDefaults(infoById.get(id) ?? infos.get(id)!), result.edits.get(id) ?? {})]));
+		let developerRole: boolean | undefined;
+		if (!catalogProvider && (connection!.style === "openai" || connection!.style === "openai-responses")) {
+			developerRole = await probeDeveloperRole(baseUrl, resolveApiKeyForProbe(connection!.apiKey.mode, connection!.apiKey.value), chatModelCandidates(ids));
+		}
+		const provider = buildProviderConfig(connection!.style, connection!.api, baseUrl || connection!.endpoint.normalized, connection!.apiKey, ids,
+			{ reasoning: "xhigh", image: false }, undefined, infoById, developerRole, overrides);
+		if (!(await persistProvider(ctx, connection!.providerId, provider))) return;
+		persistApiKey(ctx, connection!.providerId, connection!.apiKey, connection!.style);
+		if (catalogProvider && catalogIds.length) markManaged(connection!.providerId, catalogProvider.id, ids, catalogIds);
+		const origins = summarizeOrigins(ids, infoById);
+		ctx.ui.notify(`Created "${connection!.providerId}" with ${ids.length} model(s)${origins ? ` · ${origins}` : ""}.`, "info");
+		return connection!.providerId;
 	}
 }
 
-async function addCustom(ctx: CommandContext) {
-	const styleChoice = await promptProviderStyle(ctx);
-	if (!styleChoice) return;
-	const { style, api } = styleChoice;
-
-	const endpoint = await promptEndpoint(ctx, style, api);
-	if (!endpoint) return;
-	if (!(await confirmEndpointReuse(ctx, endpoint.normalized))) return;
-
-	const providerId = await promptProviderId(ctx, endpoint.normalized);
-	if (!providerId) return;
-
-	const apiKey = await promptApiKey(ctx);
-	if (!apiKey) return;
-	if (apiKey.mode === "none") {
-		ctx.ui.notify(
-			style === "ollama"
-				? 'No API key selected. An "ollama" placeholder key is stored so the provider still loads.'
-				: 'No API key selected. A "dummy" key is stored so the provider still loads.',
-			"info",
-		);
-	}
-
-	const collected = await collectModelIds(ctx, style, api, apiKey, endpoint.normalized, endpoint.raw);
-	if (!collected || collected.ids.length === 0) return;
-
-	// pi sends system messages with the "developer" role for reasoning models
-	// when the endpoint supports it; gateways that don't (e.g. Kimi's
-	// subscription endpoint) answer 400. Probe it once with a tiny completion.
-	let developerRole: boolean | undefined;
-	if (style === "openai" || style === "openai-responses") {
-		const probeBase = collected.baseUrl ?? endpoint.normalized;
-		// Likely chat models first: asking an embedding model proves nothing.
-		developerRole = await probeDeveloperRole(probeBase, resolveApiKeyForProbe(apiKey.mode, apiKey.value), chatModelCandidates(collected.ids));
-		if (developerRole === false) {
-			ctx.ui.notify("This endpoint rejects the developer role — it will be disabled in the provider config.", "info");
-		} else if (developerRole === undefined) {
-			ctx.ui.notify("Could not probe developer-role support — defaulting to off (safe for every endpoint).", "info");
-		}
-	}
-
-	const providerConfig = buildProviderConfig(
-		style,
-		api,
-		// After a successful probe this is the base variant that actually
-		// answered; otherwise the endpoint as entered.
-		collected.baseUrl ?? endpoint.normalized,
-		apiKey,
-		dedupe(collected.ids),
-		// The reasoning ceiling for thinking models defaults to xhigh; image /
-		// context / reasoning come from the probe (models.dev, local rules,
-		// then model-probe defaults). Tune per model later via Edit provider →
-		// Edit a model.
-		{ reasoning: "xhigh", image: true },
-		undefined,
-		collected.infoById,
-		developerRole,
-		collected.options,
-	);
-	if (!(await persistProvider(ctx, providerId, providerConfig))) return;
-	persistApiKey(ctx, providerId, apiKey, style);
-
-	// Where each model's metadata came from, e.g. "gateway 3 • models.dev 2".
-	const origins = collected.infoById ? summarizeOrigins(collected.ids, collected.infoById) : "";
-	const count = collected.ids.length;
-	ctx.ui.notify(
-		`Saved provider "${providerId}" with ${count} model${count === 1 ? "" : "s"} to ${STORE_PATH}` + (origins ? ` — metadata: ${origins}` : ""),
-		"info",
-	);
-	ctx.ui.notify("Open /model to use your new provider.", "info");
-}
-
-export async function addProviderFlow(ctx: CommandContext) {
+export async function addProviderFlow(ctx: CommandContext): Promise<string | undefined> {
 	const source = await selectOne(ctx, "Add provider", [
-		{
-			value: "catalog",
-			label: "From models.dev catalog",
-			description: "Known API providers (OpenRouter, DeepSeek, ...) — model list and metadata from models.dev, no probing",
-		},
-		{ value: "custom", label: "Custom endpoint", description: "Any compatible endpoint — auto-detect models, or add them by hand" },
+		{ value: "catalog", label: "From models.dev catalog", description: "Known providers and catalog synchronization" },
+		{ value: "custom", label: "Custom endpoint", description: "Configure the connection, then discover or add models" },
 	]);
-	if (source === "catalog") return addFromCatalog(ctx);
-	if (source === "custom") return addCustom(ctx);
+	if (source === "custom") return runProviderWizard(ctx);
+	if (source === "catalog") { const provider = await pickCatalogProvider(ctx); if (provider) return runProviderWizard(ctx, provider); }
 }
